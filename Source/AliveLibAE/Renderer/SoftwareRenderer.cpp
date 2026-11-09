@@ -3,6 +3,71 @@
 #include "PsxRender.hpp"
 #include "Psx.hpp"
 #include "VRam.hpp"
+#include "../Ps2Coop.hpp"
+
+#ifdef __PS2__
+extern "C" volatile u32 gPs2FrameHeartbeat; // hang watchdog, relive/Exe.cpp
+#endif
+
+#ifdef RELIVE_PS2_HOSTFS
+// Test builds write a frame to the game folder every 300 frames so a run in PCSX2 can be checked
+// without looking at the emulator window.
+static void DumpFrameBmp(u32 index, const void* pPixels, s32 pitch, s32 w, s32 h, s32 format)
+{
+    const SDL_PixelFormatDetails* details = SDL_GetPixelFormatDetails(static_cast<SDL_PixelFormat>(format));
+    if (!details || w <= 0 || h <= 0)
+    {
+        return;
+    }
+
+    char_type name[32] = {};
+    snprintf(name, sizeof(name), "ps2shot_%05u.bmp", index);
+    FILE* f = fopen(name, "wb");
+    if (!f)
+    {
+        return;
+    }
+
+    const u32 rowSize = (static_cast<u32>(w) * 3 + 3) & ~3u;
+    const u32 dataSize = rowSize * static_cast<u32>(h);
+    u8 header[54] = {'B', 'M'};
+    auto put32 = [&](u32 off, u32 v)
+    {
+        header[off] = static_cast<u8>(v);
+        header[off + 1] = static_cast<u8>(v >> 8);
+        header[off + 2] = static_cast<u8>(v >> 16);
+        header[off + 3] = static_cast<u8>(v >> 24);
+    };
+    put32(2, 54 + dataSize);
+    put32(10, 54);
+    put32(14, 40);
+    put32(18, static_cast<u32>(w));
+    put32(22, static_cast<u32>(h));
+    header[26] = 1;
+    header[28] = 24;
+    put32(34, dataSize);
+    fwrite(header, 1, sizeof(header), f);
+
+    std::vector<u8> row(rowSize, 0);
+    for (s32 y = h - 1; y >= 0; y--)
+    {
+        const u8* src = static_cast<const u8*>(pPixels) + y * pitch;
+        for (s32 x = 0; x < w; x++)
+        {
+            u32 pixel = 0;
+            memcpy(&pixel, src + x * details->bytes_per_pixel, details->bytes_per_pixel);
+            u8 r = 0, g = 0, b = 0;
+            SDL_GetRGB(pixel, details, nullptr, &r, &g, &b);
+            row[x * 3 + 0] = b;
+            row[x * 3 + 1] = g;
+            row[x * 3 + 2] = r;
+        }
+        fwrite(row.data(), 1, rowSize, f);
+    }
+    fclose(f);
+    LOG_INFO("Frame dump " << name << " (" << w << "x" << h << ", " << SDL_GetPixelFormatName(static_cast<SDL_PixelFormat>(format)) << ")");
+}
+#endif
 
 void SoftwareRenderer::Destroy()
 {
@@ -62,6 +127,9 @@ void SoftwareRenderer::PalSetData(const IRenderer::PalRecord& record, const u8* 
 void SoftwareRenderer::EndFrame()
 {
     SDL_RenderPresent(mRenderer);
+#ifdef __PS2__
+    gPs2FrameHeartbeat++;
+#endif
     mFrameStarted = false;
 }
 
@@ -92,13 +160,104 @@ void SoftwareRenderer::OutputSize(s32* w, s32* h)
     SDL_GetCurrentRenderOutputSize(mRenderer, w, h);
 }
 
+#ifdef __PS2__
+// RGB565 -> ABGR1555, two pixels per 32-bit word. The green low bit is dropped.
+static void Convert565To1555(const void* pSrc, s32 srcPitch, void* pDst, s32 dstPitch, s32 w, s32 h)
+{
+    for (s32 y = 0; y < h; y++)
+    {
+        const u32* src = reinterpret_cast<const u32*>(static_cast<const u8*>(pSrc) + y * srcPitch);
+        u32* dst = reinterpret_cast<u32*>(static_cast<u8*>(pDst) + y * dstPitch);
+        for (s32 x = 0; x < w / 2; x++)
+        {
+            const u32 p = src[x];
+            const u32 r = (p >> 11) & 0x001F001F;
+            const u32 g = (p >> 6) & 0x001F001F;
+            const u32 b = p & 0x001F001F;
+            dst[x] = r | (g << 5) | (b << 10) | 0x80008000;
+        }
+    }
+}
+#endif
+
+void SoftwareRenderer::SetUploadRect(const SDL_Rect* pRect)
+{
+    mHasUploadRect = pRect != nullptr;
+    if (pRect)
+    {
+        mUploadRect = *pRect;
+    }
+}
+
 bool SoftwareRenderer::UpdateBackBuffer(const void* pPixels, s32 pitch)
 {
     if (!mBackBufferTexture)
     {
         return false;
     }
-    SDL_UpdateTexture(mBackBufferTexture, nullptr, pPixels, pitch);
+#ifdef __PS2__
+    if (mConvert565To1555)
+    {
+        void* pTexPixels = nullptr;
+        s32 texPitch = 0;
+        if (SDL_LockTexture(mBackBufferTexture, nullptr, &pTexPixels, &texPitch))
+        {
+            // In game the source is the whole 1024x512 PSX VRAM but only the 640x240 display area is
+            // shown: converting just that cut the upload from ~18 ms to a third.
+            s32 x = 0;
+            s32 y = 0;
+            s32 w = mLastW;
+            s32 h = mLastH;
+            if (mHasUploadRect)
+            {
+                x = mUploadRect.x & ~1;
+                y = mUploadRect.y;
+                w = mUploadRect.w + (mUploadRect.x & 1);
+                h = mUploadRect.h;
+                if (x + w > mLastW)
+                {
+                    w = mLastW - x;
+                }
+                if (y + h > mLastH)
+                {
+                    h = mLastH - y;
+                }
+            }
+            Convert565To1555(static_cast<const u8*>(pPixels) + y * pitch + x * 2, pitch,
+                             static_cast<u8*>(pTexPixels) + y * texPitch + x * 2, texPitch, (w + 1) & ~1, h);
+            // In-game frames (they come with an upload rect): co-op hints on top of the visible area.
+            if (mHasUploadRect)
+            {
+                Ps2Coop_DrawOverlay(static_cast<u8*>(pTexPixels) + y * texPitch + x * 2, texPitch, w, h);
+            }
+            // The hint is for this upload only; other callers (credits intro) send full frames.
+            mHasUploadRect = false;
+    #ifdef RELIVE_PS2_HOSTFS
+            // Dump what the GS really receives, to check the colour conversion.
+            if ((mFrameCount + 1) == 10 || (mFrameCount + 1) % 600 == 0)
+            {
+                DumpFrameBmp(mFrameCount + 1, pTexPixels, texPitch, mLastW, mLastH, SDL_PIXELFORMAT_ABGR1555);
+            }
+    #endif
+            SDL_UnlockTexture(mBackBufferTexture);
+        }
+    }
+    else
+#endif
+    {
+        SDL_UpdateTexture(mBackBufferTexture, nullptr, pPixels, pitch);
+    }
+#ifdef RELIVE_PS2_HOSTFS
+    ++mFrameCount;
+    if (mFrameCount % 30 == 0)
+    {
+        LOG_INFO("Frame " << mFrameCount << " at " << SDL_GetTicks() << " ms");
+    }
+    if (!mConvert565To1555 && (mFrameCount == 10 || mFrameCount % 600 == 0))
+    {
+        DumpFrameBmp(mFrameCount, pPixels, pitch, mLastW, mLastH, mFormat);
+    }
+#endif
     return true;
 }
 
@@ -110,7 +269,15 @@ void SoftwareRenderer::CreateBackBuffer(bool filter, s32 format, s32 w, s32 h)
         {
             SDL_DestroyTexture(mBackBufferTexture);
         }
-        mBackBufferTexture = SDL_CreateTexture(mRenderer, static_cast<SDL_PixelFormat>(format), SDL_TextureAccess::SDL_TEXTUREACCESS_STREAMING, w, h);
+        s32 textureFormat = format;
+#ifdef __PS2__
+        mConvert565To1555 = (format == SDL_PIXELFORMAT_RGB565);
+        if (mConvert565To1555)
+        {
+            textureFormat = SDL_PIXELFORMAT_ABGR1555;
+        }
+#endif
+        mBackBufferTexture = SDL_CreateTexture(mRenderer, static_cast<SDL_PixelFormat>(textureFormat), SDL_TextureAccess::SDL_TEXTUREACCESS_STREAMING, w, h);
 
         if (filter)
         {
@@ -121,8 +288,10 @@ void SoftwareRenderer::CreateBackBuffer(bool filter, s32 format, s32 w, s32 h)
             SDL_SetTextureScaleMode(mBackBufferTexture, SDL_SCALEMODE_NEAREST);
         }
 
-        mLastH = w;
-        mLastW = h;
+        mLastW = w;
+        mLastH = h;
+        mFormat = format;
+        LOG_INFO("Back buffer " << w << "x" << h << " format " << SDL_GetPixelFormatName(static_cast<SDL_PixelFormat>(format)) << (mBackBufferTexture ? "" : " FAILED: ") << (mBackBufferTexture ? "" : SDL_GetError()));
     }
 }
 

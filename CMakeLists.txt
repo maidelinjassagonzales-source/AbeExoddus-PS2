@@ -56,20 +56,42 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 enable_testing()
 
+if(PS2)
+    # magic_enum is included as <magic_enum/include/magic_enum.hpp> relative to 3rdParty.
+    include_directories(SYSTEM ${CMAKE_CURRENT_LIST_DIR}/3rdParty)
+    # No log file on PS2 (no writable cwd guaranteed); logs go to the EE console only.
+    add_compile_definitions(ELPP_NO_DEFAULT_LOG_FILE ELPP_NO_LOG_TO_FILE)
+    # ON: test build for PCSX2 with the game files on the PC (host:), no IOP reset, frame dumps.
+    # OFF: real console build, game files on USB.
+    option(RELIVE_PS2_HOSTFS "PCSX2 host: test build" ON)
+    if(RELIVE_PS2_HOSTFS)
+        add_compile_definitions(RELIVE_PS2_HOSTFS RELIVE_PS2_PROFILE)
+    endif()
+    # Diagnostics for real-console builds: step trace over the EE serial port.
+    option(RELIVE_PS2_DISCTRACE "Serial step trace in real-console builds" OFF)
+    if(RELIVE_PS2_DISCTRACE)
+        add_compile_definitions(RELIVE_PS2_DISCTRACE)
+    endif()
+endif()
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/3rdParty)
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/Source/AliveLibCommon)
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/Source/AliveLibAO)
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/Source/AliveLibAE)
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/Source/relive)
+# PS2: only the game itself is built; editor tools, tests and asset packaging stay PC-only.
+if(NOT PS2)
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/Source/Tools/relive_api)
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/Source/Tools/relive_api_integration_test)
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/Source/Tools/relive_api_unit_test)
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/assets)
+endif()
 
 # -----------------------------------------------------------------------------
 # Setup unity builds
 set_target_properties(EasyLogging++ PROPERTIES UNITY_BUILD ON)
+if(NOT PS2)
 set_target_properties(googletest    PROPERTIES UNITY_BUILD ON)
+endif()
 
 # Disable for now because it breaks alivehook manager by setting unity_XX 
 # to always be the "group"
@@ -78,9 +100,11 @@ set_target_properties(AliveLibAE     PROPERTIES UNITY_BUILD OFF)
 set_target_properties(AliveLibAO     PROPERTIES UNITY_BUILD OFF)
 set_target_properties(relive         PROPERTIES UNITY_BUILD OFF)
 
+if(NOT PS2)
 set_target_properties(relive_api      PROPERTIES UNITY_BUILD OFF) # too big
 set_target_properties(relive_api_integration_test PROPERTIES UNITY_BUILD OFF) # too big
 set_target_properties(relive_api_unit_test PROPERTIES UNITY_BUILD OFF) # too big
+endif()
 
 # -----------------------------------------------------------------------------
 
@@ -116,9 +140,11 @@ target_precompile_headers(
     "${CMAKE_CURRENT_SOURCE_DIR}/Source/AliveLibCommon/pch_shared.h"
 )
 
+target_precompile_headers(relive       REUSE_FROM AliveLibAO)
+
+if(NOT PS2)
 target_precompile_headers(relive_api_integration_test REUSE_FROM AliveLibAO)
 target_precompile_headers(relive_api_unit_test REUSE_FROM AliveLibAO)
-target_precompile_headers(relive       REUSE_FROM AliveLibAO)
 
 # 'relive_api' needs its own PCH because of different `_CRT_SECURE_NO_WARNINGS`
 # and defines with the rest
@@ -126,6 +152,7 @@ target_precompile_headers(
     relive_api PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Source/AliveLibCommon/pch_shared.h"
 )
+endif()
 
 # -----------------------------------------------------------------------------
 

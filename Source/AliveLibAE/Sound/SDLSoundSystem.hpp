@@ -55,6 +55,12 @@ private:
     AudioFilterMode mAudioFilterMode = AudioFilterMode::Linear;
     std::vector<StereoSample_S16> mTempSoundBuffer;
     std::vector<StereoSample_S16> mNoReverbBuffer;
+#ifdef __PS2__
+    // PS2 mixer: integer/fixed point, no per-call allocations (see RenderAudioPs2).
+    void RenderAudioPs2(StereoSample_S16* pSampleBuffer, s32 sampleBufferCount);
+    std::vector<s32> mPs2Mix;
+    std::vector<StereoSample_S16> mPs2Out;
+#endif
     cinder::audio::dsp::RingBufferT<StereoSample_S16> mAudioRingBuffer;
     std::atomic_bool mRenderAudioThreadQuit{false};
     std::unique_ptr<std::thread> mRenderAudioThread;

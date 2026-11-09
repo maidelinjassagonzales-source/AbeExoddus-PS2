@@ -1,4 +1,6 @@
 #include "stdafx.h"
+#include "DebugHelpers.hpp"
+#include "Ps2Trace.hpp"
 #include "relive_config.h"
 #include "Io.hpp"
 #include "Function.hpp"
@@ -22,6 +24,76 @@ ALIVE_VAR(1, 0xBD2A5C, Bool32, sIOSyncReads_BD2A5C, FALSE);
 ALIVE_VAR(1, 0xBBC55C, HANDLE, sIoThreadHandle_BBC55C, nullptr);
 
 
+#ifdef __PS2__
+// Set at startup when booted from a disc image: absolute prefix of the game data folder.
+const char_type* gPs2DiscDataPrefix = "";
+
+// SDL_IOFromFile cannot open files on the PS2 disc drivers (it fails where plain fopen works), so
+// disc files are opened with fopen and wrapped in a small SDL_IOStream.
+static Sint64 SDLCALL Ps2FileSize(void* userdata)
+{
+    FILE* f = static_cast<FILE*>(userdata);
+    const long pos = ftell(f);
+    fseek(f, 0, SEEK_END);
+    const long size = ftell(f);
+    fseek(f, pos, SEEK_SET);
+    return size;
+}
+
+static Sint64 SDLCALL Ps2FileSeek(void* userdata, Sint64 offset, SDL_IOWhence whence)
+{
+    FILE* f = static_cast<FILE*>(userdata);
+    const int origin = whence == SDL_IO_SEEK_CUR ? SEEK_CUR : (whence == SDL_IO_SEEK_END ? SEEK_END : SEEK_SET);
+    if (fseek(f, static_cast<long>(offset), origin) != 0)
+    {
+        return -1;
+    }
+    return ftell(f);
+}
+
+static size_t SDLCALL Ps2FileRead(void* userdata, void* ptr, size_t size, SDL_IOStatus* status)
+{
+    const size_t got = fread(ptr, 1, size, static_cast<FILE*>(userdata));
+    if (got < size && status)
+    {
+        *status = SDL_IO_STATUS_EOF;
+    }
+    return got;
+}
+
+static size_t SDLCALL Ps2FileWrite(void* userdata, const void* ptr, size_t size, SDL_IOStatus*)
+{
+    return fwrite(ptr, 1, size, static_cast<FILE*>(userdata));
+}
+
+static bool SDLCALL Ps2FileClose(void* userdata)
+{
+    return fclose(static_cast<FILE*>(userdata)) == 0;
+}
+
+static SDL_IOStream* Ps2OpenWithFopen(const char_type* path, const char_type* mode)
+{
+    FILE* f = fopen(path, mode);
+    if (!f)
+    {
+        return nullptr;
+    }
+    SDL_IOStreamInterface iface;
+    SDL_INIT_INTERFACE(&iface);
+    iface.size = Ps2FileSize;
+    iface.seek = Ps2FileSeek;
+    iface.read = Ps2FileRead;
+    iface.write = Ps2FileWrite;
+    iface.close = Ps2FileClose;
+    SDL_IOStream* io = SDL_OpenIO(&iface, f);
+    if (!io)
+    {
+        fclose(f);
+    }
+    return io;
+}
+#endif
+
 // SDL/C IO Wrappers
 IO_FileHandleType IO_Open(const char_type* fileName, const char_type* mode)
 {
@@ -31,7 +103,37 @@ IO_FileHandleType IO_Open(const char_type* fileName, const char_type* mode)
     }
 
 #if USE_SDL3_IO
+    #ifdef __PS2__
+    PS2_TRACE_ENABLE(true);
+    PS2_TRACE(fileName);
+    IO_FileHandleType h = SDL_IOFromFile(fileName, mode);
+    if (!h && !strchr(fileName, ';') && !strchr(fileName, ':') && mode[0] == 'r')
+    {
+        // Disc (ISO 9660): names are upper case with a ";1" version suffix.
+        char_type isoName[256] = {};
+        strcpy(isoName, gPs2DiscDataPrefix);
+        size_t i = strlen(isoName);
+        for (size_t j = 0; fileName[j] && i < sizeof(isoName) - 3; j++, i++)
+        {
+            isoName[i] = static_cast<char_type>(toupper(fileName[j]));
+        }
+        h = Ps2OpenWithFopen(isoName, mode); // cdfs: takes plain names...
+        if (!h)
+        {
+            isoName[i++] = ';'; // ...cdrom0: needs the ISO 9660 version suffix
+            isoName[i++] = '1';
+            h = Ps2OpenWithFopen(isoName, mode);
+        }
+        PS2_TRACE(isoName, h ? 1 : 0, h ? static_cast<u32>(SDL_GetIOSize(h)) : 0);
+    }
+    if (!h)
+    {
+        LOG_WARNING("IO_Open failed: '" << fileName << "' mode " << mode << ": " << SDL_GetError());
+    }
+    return h;
+    #else
     return SDL_IOFromFile(fileName, mode);
+    #endif
 #else
     return ae_fopen_520C64(fileName, mode);
 #endif
@@ -57,7 +159,28 @@ s32 IO_Close(IO_FileHandleType pHandle)
 
 size_t IO_Read(IO_FileHandleType pHandle, void* ptr, size_t size, size_t maxnum)
 {
-#if USE_SDL3_IO
+#if USE_SDL3_IO && defined(__PS2__)
+    // PS2: file data arrives from the IOP by DMA. Large reads into buffers that are not
+    // cache-line aligned took the whole EE down in PCSX2, so go through an aligned bounce
+    // buffer in 32 KB chunks.
+    static u8 sBounce[32 * 1024] __attribute__((aligned(64)));
+    const size_t total = size * maxnum;
+    size_t done = 0;
+    while (done < total)
+    {
+        const size_t want = total - done < sizeof(sBounce) ? total - done : sizeof(sBounce);
+        PS2_TRACE("io_chunk", static_cast<u32>(done), static_cast<u32>(SDL_TellIO(pHandle)));
+        const size_t got = SDL_ReadIO(pHandle, sBounce, want);
+        PS2_TRACE("io_chunk_got", static_cast<u32>(got), reinterpret_cast<u32>(static_cast<u8*>(ptr) + done));
+        memcpy(static_cast<u8*>(ptr) + done, sBounce, got);
+        done += got;
+        if (got != want)
+        {
+            break;
+        }
+    }
+    return done;
+#elif USE_SDL3_IO
     return SDL_ReadIO(pHandle, ptr, size * maxnum);
 #else
     return ae_fread_520B5C(ptr, size, maxnum, pHandle);
@@ -590,7 +713,17 @@ EXPORT void IO_EnumerateDirectory(const char_type* fileName, TEnumCallBack cb)
         _findclose(hFind);
     }
 #else
-    DIR* dir(opendir("."));
+    #if defined(__PS2__) && !defined(RELIVE_PS2_HOSTFS)
+    // Real PS2: the only thing listed is the save folder on the memory card.
+    std::string dirPath = FS::GetPrefPath();
+    if (!dirPath.empty() && dirPath.back() == '/')
+    {
+        dirPath.pop_back();
+    }
+    #else
+    const std::string dirPath = ".";
+    #endif
+    DIR* dir(opendir(dirPath.c_str()));
     if (dir)
     {
         dirent* ent = nullptr;
@@ -604,7 +737,7 @@ EXPORT void IO_EnumerateDirectory(const char_type* fileName, TEnumCallBack cb)
                 if (WildCardMatcher(itemName, strFilter, true))
                 {
                     struct stat statbuf;
-                    if (stat((+"./" + itemName).c_str(), &statbuf) == 0)
+                    if (stat((dirPath + "/" + itemName).c_str(), &statbuf) == 0)
                     {
                         const bool isFile = !S_ISDIR(statbuf.st_mode);
                         if (isFile)

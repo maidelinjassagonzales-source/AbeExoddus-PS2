@@ -8,6 +8,8 @@
 #include "PsxRender.hpp"
 #include "Psx.hpp"
 #include "Renderer/IRenderer.hpp"
+#include "Ps2Profiler.hpp"
+
 #include "Renderer/SoftwareRenderer.hpp"
 
 void VGA_ForceLink()
@@ -118,7 +120,18 @@ EXPORT void CC VGA_CopyToFront_4F3730(Bitmap* pBmp, RECT* pRect, s32 /*screenMod
 
     SDL_Rect* pCopyRect = pRect ? &copyRect : nullptr;
 
-    if (SDL_BlitSurface(pBmp->field_0_pSurface, pCopyRect, sVGA_bmp_primary_BD2A20.field_0_pSurface, nullptr))
+    bool blitOk = false;
+    {
+        PS2_PROF_SCOPE(VgaBlit);
+#ifdef __PS2__
+        // The primary surface is never shown (the texture is filled from pBmp) and this
+        // RGB565 -> XRGB1555 blit cost ~60-110 ms per frame on the EE, so skip it.
+        blitOk = true;
+#else
+        blitOk = SDL_BlitSurface(pBmp->field_0_pSurface, pCopyRect, sVGA_bmp_primary_BD2A20.field_0_pSurface, nullptr);
+#endif
+    }
+    if (blitOk)
     {
         IRenderer::GetRenderer()->CreateBackBuffer(s_VGA_FilterScreen, pBmp->field_0_pSurface->format, pBmp->field_0_pSurface->w, pBmp->field_0_pSurface->h);
 
@@ -135,7 +148,13 @@ EXPORT void CC VGA_CopyToFront_4F3730(Bitmap* pBmp, RECT* pRect, s32 /*screenMod
             IRenderer::GetRenderer()->CreateBackBuffer(s_VGA_FilterScreen, pBmp->field_0_pSurface->format, pBmp->field_0_pSurface->w, pBmp->field_0_pSurface->h);
         }
 
-        if (IRenderer::GetRenderer()->UpdateBackBuffer(pBmp->field_0_pSurface->pixels, pBmp->field_0_pSurface->pitch))
+        bool uploadOk = false;
+        {
+            PS2_PROF_SCOPE(VgaUpload);
+            IRenderer::GetRenderer()->SetUploadRect(pCopyRect);
+            uploadOk = IRenderer::GetRenderer()->UpdateBackBuffer(pBmp->field_0_pSurface->pixels, pBmp->field_0_pSurface->pitch);
+        }
+        if (uploadOk)
         {
             SDL_Rect* pDst = nullptr;
             SDL_Rect dst = {};
@@ -183,6 +202,7 @@ EXPORT void CC VGA_CopyToFront_4F3730(Bitmap* pBmp, RECT* pRect, s32 /*screenMod
                 }
             }
 
+            PS2_PROF_SCOPE(VgaDraw);
             IRenderer::GetRenderer()->Clear(0, 0, 0);
             IRenderer::GetRenderer()->BltBackBuffer(pCopyRect, pDst);
         }
@@ -196,7 +216,11 @@ EXPORT void CC VGA_CopyToFront_4F3730(Bitmap* pBmp, RECT* pRect, s32 /*screenMod
         LOG_ERROR("Blt failure");
     }
 
-    IRenderer::GetRenderer()->EndFrame();
+    {
+        PS2_PROF_SCOPE(VgaPresent);
+        IRenderer::GetRenderer()->EndFrame();
+    }
+    PS2_PROF_END_FRAME();
 }
 
 EXPORT void CC VGA_CopyToFront_4F3710(Bitmap* pBmp, RECT* pRect)

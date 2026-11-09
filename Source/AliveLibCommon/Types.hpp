@@ -9,8 +9,10 @@ using char_type = char;
 using u16 = uint16_t;
 using s16 = int16_t;
 
-using u32 = uint32_t;
-using s32 = int32_t;
+// PS2 newlib defines int32_t as long; the engine relies on s32 being int (printf, std::min, callbacks).
+static_assert(sizeof(int) == 4, "s32 must be 32 bits");
+using u32 = unsigned int;
+using s32 = int;
 
 using f32 = float;
 using f64 = double;

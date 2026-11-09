@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Ps2Trace.hpp"
 #include "ResourceManager.hpp"
 #include "Function.hpp"
 #include "Psx.hpp"
@@ -180,6 +181,7 @@ void ResourceManager::vLoadFile_StateMachine_464A70()
             break;
 
         case State_Read_Sectors_ASync:
+            PS2_TRACE("read_sectors", static_cast<u32>(field_34_num_sectors), reinterpret_cast<u32>(field_3C_pLoadingHeader));
             if (PSX_CD_File_Read_4FB210(field_34_num_sectors, field_3C_pLoadingHeader))
             {
                 field_42_state = State_Wait_For_Read_Complete;
@@ -225,6 +227,7 @@ void ResourceManager::vLoadFile_StateMachine_464A70()
 
 void ResourceManager::OnResourceLoaded_464CE0()
 {
+    PS2_TRACE("res_loaded");
     // Iterate every section in the loaded file
     DynamicArrayIter fileSectionsArrayIter = {};
     fileSectionsArrayIter.field_0_pDynamicArray = &field_2C_pFileItem->field_10_file_sections_dArray;
@@ -541,13 +544,17 @@ void ResourceManager::LoadingLoop_465590(s16 bShowLoadingIcon)
 
     while (!field_20_files_pending_loading.IsEmpty())
     {
+        PS2_TRACE("ldloop_pump", static_cast<u32>(field_42_state), static_cast<u32>(loading_ticks_5C1BAC));
         SYS_EventsPump_494580();
+        PS2_TRACE("ldloop_update", static_cast<u32>(field_42_state));
         VUpdate(); // vLoadFile_StateMachine_464A70 - process loading of files
+        PS2_TRACE("ldloop_vsync", static_cast<u32>(field_42_state));
         PSX_VSync_4F6170(0);
         const s32 ticks = loading_ticks_5C1BAC++ + 1;
         if (bShowLoadingIcon && !bHideLoadingIcon_5C1BAA && ticks > 180)
         {
             // Render everything in the ordering table including the loading icon
+            PS2_TRACE("ldloop_icon");
             Game_ShowLoadingIcon_482D80();
         }
     }

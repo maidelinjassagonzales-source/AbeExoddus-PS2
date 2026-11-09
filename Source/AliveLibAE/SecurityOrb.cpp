@@ -291,7 +291,21 @@ void SecurityOrb::vUpdate_4665A0()
             }
         }
 
+#ifdef RELIVE_PS2_HOSTFS
+        // Test-only: with ps2godmode.txt the orbs ignore chanting, so co-op possession can be tested.
+        static const bool sGodMode = []()
+        {
+            FILE* f = fopen("ps2godmode.txt", "r");
+            if (f)
+            {
+                fclose(f);
+            }
+            return f != nullptr;
+        }();
+        if (!sGodMode && Event_Get_422C00(kEventAbeOhm))
+#else
         if (Event_Get_422C00(kEventAbeOhm))
+#endif
         {
             if (!sActiveHero_5C1B68->field_168_ring_pulse_timer || !sActiveHero_5C1B68->field_16C_bHaveShrykull || sActiveHero_5C1B68->field_CC_sprite_scale != FP_FromInteger(1))
             {

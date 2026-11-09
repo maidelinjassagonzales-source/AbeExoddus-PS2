@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Ps2Trace.hpp"
 #include "Path.hpp"
 #include "Function.hpp"
 #include "ResourceManager.hpp"
@@ -50,10 +51,63 @@ void Path::Init_4DB200(const PathData* pPathData, LevelIds level, s16 path, s16 
     field_C_pPathData = pPathData;
     field_6_cams_on_x = (field_C_pPathData->field_4_bTop - field_C_pPathData->field_0_bLeft) / field_C_pPathData->field_A_grid_width;
     field_8_cams_on_y = (field_C_pPathData->field_6_bBottom - field_C_pPathData->field_2_bRight) / field_C_pPathData->field_C_grid_height;
+
 }
+
+#ifdef RELIVE_PS2_HOSTFS
+static void Ps2DumpPossessables(Path* pPath)
+{
+    static s32 sLastKey = -1;
+    const s32 key = static_cast<s32>(pPath->field_0_levelId) * 100 + pPath->field_2_pathId;
+    if (key == sLastKey)
+    {
+        return;
+    }
+    sLastKey = key;
+    auto field_10_ppRes = pPath->field_10_ppRes;
+    auto field_C_pPathData = pPath->field_C_pPathData;
+    auto field_6_cams_on_x = pPath->field_6_cams_on_x;
+    auto field_8_cams_on_y = pPath->field_8_cams_on_y;
+    auto field_0_levelId = pPath->field_0_levelId;
+    auto field_2_pathId = pPath->field_2_pathId;
+    // Test builds: list where possessable creatures are in this path, to aim co-op test runs.
+    if (field_10_ppRes && *field_10_ppRes)
+    {
+        const s32* indexTable = reinterpret_cast<const s32*>(*field_10_ppRes + field_C_pPathData->field_16_object_indextable_offset);
+        for (s32 camY = 0; camY < field_8_cams_on_y; camY++)
+        {
+            for (s32 camX = 0; camX < field_6_cams_on_x; camX++)
+            {
+                const s32 idx = indexTable[camX + camY * field_6_cams_on_x];
+                if (idx == -1)
+                {
+                    continue;
+                }
+                Path_TLV* pTlv = reinterpret_cast<Path_TLV*>(&(*field_10_ppRes)[field_C_pPathData->field_12_object_offset + idx]);
+                while (pTlv)
+                {
+                    const TlvTypes type = pTlv->field_4_type.mType;
+                    if (type == TlvTypes::Slig_15 || type == TlvTypes::Paramite_26 || type == TlvTypes::Scrab_41 || type == TlvTypes::SligSpawner_37)
+                    {
+                        LOG_INFO("Possessable: level " << static_cast<s32>(field_0_levelId) << " path " << field_2_pathId << " camXY " << camX << "," << camY << " type " << static_cast<s32>(type) << " at " << pTlv->field_8_top_left.field_0_x << "," << pTlv->field_8_top_left.field_2_y);
+                    }
+                    if (pTlv->field_0_flags.Get(TLV_Flags::eBit3_End_TLV_List))
+                    {
+                        break;
+                    }
+                    pTlv = Path::Next_TLV_4DB6A0(pTlv);
+                }
+            }
+        }
+    }
+}
+#endif
 
 void Path::Loader_4DB800(s16 xpos, s16 ypos, LoadMode loadMode, TlvTypes typeToLoad)
 {
+#ifdef RELIVE_PS2_HOSTFS
+    Ps2DumpPossessables(this);
+#endif
     // Get a pointer to the array of index table offsets
     const s32* indexTable = reinterpret_cast<const s32*>(*field_10_ppRes + field_C_pPathData->field_16_object_indextable_offset);
 
@@ -85,6 +139,11 @@ void Path::Loader_4DB800(s16 xpos, s16 ypos, LoadMode loadMode, TlvTypes typeToL
                 data.parts.pathId = static_cast<u8>(field_2_pathId);
 
                 // Call the factory to construct the item
+                if (field_0_levelId != LevelIds::eMenu_0)
+                {
+                    PS2_TRACE_ENABLE(true);
+                }
+                PS2_TRACE("tlv", static_cast<u32>(pPathTLV->field_4_type.mType), static_cast<u32>(loadMode));
                 field_C_pPathData->field_1E_object_funcs.object_funcs[static_cast<s32>(pPathTLV->field_4_type.mType)](pPathTLV, this, data, loadMode);
             }
         }

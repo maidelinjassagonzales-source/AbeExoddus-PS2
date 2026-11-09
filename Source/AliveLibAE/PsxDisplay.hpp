@@ -52,6 +52,10 @@ public:
     EXPORT void ctor_41DC30();
     EXPORT void PutCurrentDispEnv_41DFA0();
     EXPORT void PSX_Display_Render_OT_41DDF0();
+#ifdef __PS2__
+    // Draws and shows the current ordering table halfway through the 30 fps step (PS2 60 fps mode).
+    void PS2_Render_OT_Intermediate();
+#endif
 };
 // TODO: Size
 

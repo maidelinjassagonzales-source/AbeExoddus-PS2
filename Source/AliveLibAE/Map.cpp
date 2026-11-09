@@ -1,4 +1,6 @@
 #include "stdafx.h"
+#include "Ps2Trace.hpp"
+#include "Ps2Coop.hpp"
 #include "Map.hpp"
 #include "PathData.hpp"
 #include "Function.hpp"
@@ -687,7 +689,8 @@ void Map::GoTo_Camera_481890()
 
     if (field_A_level != field_0_current_level || field_8_force_load)
     {
-        pResourceManager_5C1BB0->LoadingLoop_465590(bShowLoadingIcon);
+        PS2_TRACE("goto_loadloop1");
+    pResourceManager_5C1BB0->LoadingLoop_465590(bShowLoadingIcon);
 
         // Free all cameras
         for (s32 i = 0; i < ALIVE_COUNTOF(field_2C_camera_array); i++)
@@ -890,11 +893,13 @@ void Map::GoTo_Camera_481890()
 
     Map::Load_Path_Items_482C10(field_2C_camera_array[0], LoadMode::ConstructObject_0);
     pResourceManager_5C1BB0->LoadingLoop_465590(bShowLoadingIcon);
+    PS2_TRACE("goto_items_others");
     Map::Load_Path_Items_482C10(field_2C_camera_array[3], LoadMode::ConstructObject_0);
     Map::Load_Path_Items_482C10(field_2C_camera_array[4], LoadMode::ConstructObject_0);
     Map::Load_Path_Items_482C10(field_2C_camera_array[1], LoadMode::ConstructObject_0);
     Map::Load_Path_Items_482C10(field_2C_camera_array[2], LoadMode::ConstructObject_0);
 
+    PS2_TRACE("goto_screenmgr");
     // Create the screen manager if it hasn't already been done (probably should have always been done by this point though?)
     if (!pScreenManager_5BB5F4)
     {
@@ -905,6 +910,7 @@ void Map::GoTo_Camera_481890()
         }
     }
 
+    PS2_TRACE("goto_construct");
     sPath_dword_BB47C0->Loader_4DB800(field_D0_cam_x_idx, field_D2_cam_y_idx, LoadMode::ConstructObject_0, TlvTypes::None_m1); // none = load all
     if (prevPathId != field_2_current_path || prevLevelId != field_0_current_level)
     {
@@ -917,6 +923,7 @@ void Map::GoTo_Camera_481890()
         }
     }
 
+    PS2_TRACE("goto_fg1");
     Create_FG1s_480F10();
 
     if (field_10_screen_change_effect == CameraSwapEffects::ePlay1FMV_5)
@@ -932,6 +939,7 @@ void Map::GoTo_Camera_481890()
         pScreenManager_5BB5F4->field_40_flags |= 0x10000;
     }
 
+    PS2_TRACE("goto_loadloop2");
     if (prevLevelId != field_0_current_level)
     {
         pResourceManager_5C1BB0->LoadingLoop_465590(FALSE);
@@ -980,6 +988,7 @@ void Map::GoTo_Camera_481890()
         }
     }
 
+    PS2_TRACE("goto_done");
     bHideLoadingIcon_5C1BAA = 0;
     loading_ticks_5C1BAC = 0;
 
@@ -1377,6 +1386,11 @@ void CC Map::LoadResourcesFromList_4DBE70(const char_type* pFileName, ResourceMa
 
 s16 Map::SetActiveCameraDelayed_4814A0(MapDirections direction, BaseAliveGameObject* pObj, s16 swapEffect)
 {
+    // PS2 co-op: the camera follows player 1 only; player 2 is pulled back on screen instead.
+    if (Ps2Coop_IsPlayer2(pObj))
+    {
+        return 0;
+    }
     Path_Change* pPathChangeTLV = nullptr;
     CameraSwapEffects convertedSwapEffect = CameraSwapEffects::eInstantChange_0;
     if (pObj)

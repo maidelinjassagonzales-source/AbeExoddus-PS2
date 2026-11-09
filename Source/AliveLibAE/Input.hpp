@@ -196,6 +196,11 @@ EXPORT InputObject& Input();
 
 ALIVE_VAR_EXTERN(InputObject, sInputObject_5BD4E0);
 ALIVE_VAR_EXTERN(u16, sCurrentControllerIndex_5C1BBE);
+
+#ifdef __PS2__
+// Engine input bits for the second DualShock (co-op player 2), 0 when none is connected.
+u32 Input_ReadSecondPadPs2();
+#endif
 ALIVE_VAR_EXTERN(u32, sLastPressedKey_BD30A0);
 ALIVE_VAR_EXTERN(s32, sIsAKeyDown_BD309C);
 ALIVE_VAR_EXTERN(s16, bLongerTimeoutToNextDemo_5C1B9A);

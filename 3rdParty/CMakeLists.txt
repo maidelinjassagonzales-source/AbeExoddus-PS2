@@ -43,6 +43,12 @@ target_include_directories(DxOld SYSTEM INTERFACE DxOld/)
 export(TARGETS DxOld FILE DxOld.cmake)
 
 # googletest lib
+if(PS2)
+    # PS2: the game sources embed unit tests; reuse the googletest port prebuilt in the PS2 SDK.
+    add_library(googletest INTERFACE)
+    target_link_libraries(googletest INTERFACE gmock gtest)
+    export(TARGETS googletest FILE googletest.cmake)
+else()
 add_library(googletest
     googletest/googletest/src/gtest-all.cc
     googletest/googlemock/src/gmock-all.cc
@@ -65,3 +71,4 @@ target_include_directories(googletest SYSTEM PUBLIC
 
 export(TARGETS googletest FILE googletest.cmake)
 set_property(TARGET googletest PROPERTY FOLDER "3rdParty")
+endif()

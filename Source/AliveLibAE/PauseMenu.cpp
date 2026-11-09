@@ -1208,10 +1208,12 @@ void PauseMenu::Page_Save_Update_491210()
     {
         strcpy(savFileName, sSaveString_5C931C);
         strcat(savFileName, ".sav");
-        if (access_impl(savFileName, 4) || bWriteSaveFile_5C937C) // check file is writable
+        // Saves live in the preferences folder (the memory card on a real PS2, "" = cwd on PC).
+        const std::string savPath = FS::GetPrefPath() + savFileName;
+        if (access_impl(savPath.c_str(), 4) || bWriteSaveFile_5C937C) // check file is writable
         {
             bWriteSaveFile_5C937C = false;
-            FILE* hFile = fopen(savFileName, "wb");
+            FILE* hFile = fopen(savPath.c_str(), "wb");
             if (hFile)
             {
                 fwrite(&sActiveQuicksaveData_BAF7F8, sizeof(Quicksave), 1u, hFile);
@@ -1474,7 +1476,7 @@ void PauseMenu::Page_Load_Update_490D50()
         {
             strcpy(saveFileName, sSaveFileRecords_BB31D8[sSavedGameToLoadIdx_BB43FC].field_0_fileName);
             strcat(saveFileName, ".sav");
-            FILE* hFile = ae_fopen_520C64(saveFileName, "rb");
+            FILE* hFile = ae_fopen_520C64((FS::GetPrefPath() + saveFileName).c_str(), "rb");
             if (hFile)
             {
                 ae_fread_520B5C(&sActiveQuicksaveData_BAF7F8, sizeof(Quicksave), 1u, hFile);
@@ -1502,7 +1504,7 @@ void PauseMenu::Page_Load_Update_490D50()
         {
             strcpy(saveFileName, sSaveFileRecords_BB31D8[sSavedGameToLoadIdx_BB43FC].field_0_fileName);
             strcat(saveFileName, ".sav");
-            ae_remove_520B27(saveFileName);
+            ae_remove_520B27((FS::GetPrefPath() + saveFileName).c_str());
             Quicksave_FindSaves_4D4150();
         }
     }

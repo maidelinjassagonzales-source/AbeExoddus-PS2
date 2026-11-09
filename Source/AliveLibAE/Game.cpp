@@ -1,4 +1,10 @@
 #include "stdafx.h"
+#include "Ps2Trace.hpp"
+#include "Ps2CreditsIntro.hpp"
+#include "Ps2Coop.hpp"
+#include "Ps2Smooth.hpp"
+#include "Ps2Tour.hpp"
+#include "Ps2Profiler.hpp"
 #include "AddPointer.hpp"
 #include "Game.hpp"
 #include "Sys.hpp"
@@ -496,6 +502,11 @@ EXPORT void CC Game_Run_466D40()
 
     Init_Sound_DynamicArrays_And_Others_43BDB0();
 
+#ifdef RELIVE_PS2_HOSTFS
+    void Ps2_TestAllMovies(); // Movie.cpp, test builds only
+    Ps2_TestAllMovies();
+#endif
+
     Camera camera;
     camera.ctor_480DD0();
 
@@ -724,6 +735,68 @@ EXPORT void CC Game_Main_4949F0()
     Game_Shutdown_4F2C30();
 }
 
+// Draws every drawable object, the FG1 layers and the background into the ordering table.
+// mainPass is false for the PS2 60 fps in-between frame (no autoplayer sync points there).
+static void Game_RenderAllToOt(PrimHeader** ppOtBuffer, bool mainPass)
+{
+    // Render objects
+    if (mainPass)
+    {
+        GetGameAutoPlayer().SyncPoint(SyncPoints::DrawAllStart);
+    }
+    for (s32 i = 0; i < gObjList_drawables_5C1124->Size(); i++)
+    {
+        BaseGameObject* pObj = gObjList_drawables_5C1124->ItemAt(i);
+        if (!pObj)
+        {
+            break;
+        }
+
+        if (pObj->field_6_flags.Get(BaseGameObject::eDead_Bit3))
+        {
+            pObj->field_6_flags.Clear(BaseGameObject::eCantKill_Bit11);
+        }
+        else if (pObj->field_6_flags.Get(BaseGameObject::eDrawable_Bit4))
+        {
+            pObj->field_6_flags.Set(BaseGameObject::eCantKill_Bit11);
+            PS2_TRACE("rnd", static_cast<u32>(pObj->Type()), reinterpret_cast<u32>(pObj));
+            pObj->VRender(ppOtBuffer);
+        }
+    }
+    if (mainPass)
+    {
+        GetGameAutoPlayer().SyncPoint(SyncPoints::DrawAllEnd);
+    }
+
+    // Render FG1's
+    for (s32 i = 0; i < gFG1List_5D1E28->Size(); i++)
+    {
+        FG1* pFG1 = gFG1List_5D1E28->ItemAt(i);
+        if (!pFG1)
+        {
+            break;
+        }
+
+        if (pFG1->field_6_flags.Get(BaseGameObject::eDead_Bit3))
+        {
+            pFG1->field_6_flags.Clear(BaseGameObject::eCantKill_Bit11);
+        }
+        else if (pFG1->field_6_flags.Get(BaseGameObject::eDrawable_Bit4))
+        {
+            pFG1->field_6_flags.Set(BaseGameObject::eCantKill_Bit11);
+            pFG1->VRender(ppOtBuffer);
+        }
+    }
+
+    PS2_TRACE("fg1_done");
+    DebugFont_Flush_4DD050();
+    PS2_TRACE("drawsync");
+    PSX_DrawSync_4F6280(0);
+    PS2_TRACE("screenmgr");
+    pScreenManager_5BB5F4->VRender(ppOtBuffer);
+    PS2_TRACE("screenmgr_done");
+}
+
 EXPORT void CC Game_Loop_467230()
 {
     dword_5C2F78 = 0;
@@ -738,7 +811,13 @@ EXPORT void CC Game_Loop_467230()
         bSkipGameObjectUpdates_5C2FA0 = 0;
 
         // Update objects
+        PS2_TRACE_ENABLE(gMap_5C3030.field_0_current_level != LevelIds::eMenu_0);
+        PS2_TRACE("frame", sGnFrame_5C1B84, 0);
         GetGameAutoPlayer().SyncPoint(SyncPoints::ObjectsUpdateStart);
+        Ps2Tour_Frame();
+        Ps2Coop_Frame();
+        Ps2Smooth_SnapshotPositions();
+        PS2_PROF_BEGIN(GameUpdate);
         for (s32 baseObjIdx = 0; baseObjIdx < gBaseGameObject_list_BB47C4->Size(); baseObjIdx++)
         {
             BaseGameObject* pBaseGameObject = gBaseGameObject_list_BB47C4->ItemAt(baseObjIdx);
@@ -761,7 +840,15 @@ EXPORT void CC Game_Loop_467230()
                     }
                     else
                     {
-                        pBaseGameObject->VUpdate();
+                        PS2_TRACE("upd", static_cast<u32>(pBaseGameObject->Type()), reinterpret_cast<u32>(pBaseGameObject));
+                        if (Ps2Coop_IsPlayer2(pBaseGameObject))
+                        {
+                            Ps2Coop_UpdatePlayer2(pBaseGameObject);
+                        }
+                        else
+                        {
+                            pBaseGameObject->VUpdate();
+                        }
                     }
                 }
                 else
@@ -776,56 +863,18 @@ EXPORT void CC Game_Loop_467230()
         if (sNum_CamSwappers_5C1B66 <= 0)
         {
             GetGameAutoPlayer().SyncPoint(SyncPoints::AnimateAll);
+            PS2_TRACE("animate_all");
             AnimationBase::AnimateAll_40AC20(gObjList_animations_5C1A24);
         }
 
+        PS2_PROF_END(GameUpdate);
+        PS2_PROF_BEGIN(GameRender);
+        // PS2 60 fps: draw a frame halfway between the previous and this game step first.
+        Ps2Smooth_DrawIntermediateFrame([](PrimHeader** ppOt) { Game_RenderAllToOt(ppOt, false); });
+
         PrimHeader** ppOtBuffer = gPsxDisplay_5C1130.field_10_drawEnv[gPsxDisplay_5C1130.field_C_buffer_index].field_70_ot_buffer;
-
-        // Render objects
-        GetGameAutoPlayer().SyncPoint(SyncPoints::DrawAllStart);
-        for (s32 i = 0; i < gObjList_drawables_5C1124->Size(); i++)
-        {
-            BaseGameObject* pObj = gObjList_drawables_5C1124->ItemAt(i);
-            if (!pObj)
-            {
-                break;
-            }
-
-            if (pObj->field_6_flags.Get(BaseGameObject::eDead_Bit3))
-            {
-                pObj->field_6_flags.Clear(BaseGameObject::eCantKill_Bit11);
-            }
-            else if (pObj->field_6_flags.Get(BaseGameObject::eDrawable_Bit4))
-            {
-                pObj->field_6_flags.Set(BaseGameObject::eCantKill_Bit11);
-                pObj->VRender(ppOtBuffer);
-            }
-        }
-        GetGameAutoPlayer().SyncPoint(SyncPoints::DrawAllEnd);
-
-        // Render FG1's
-        for (s32 i = 0; i < gFG1List_5D1E28->Size(); i++)
-        {
-            FG1* pFG1 = gFG1List_5D1E28->ItemAt(i);
-            if (!pFG1)
-            {
-                break;
-            }
-
-            if (pFG1->field_6_flags.Get(BaseGameObject::eDead_Bit3))
-            {
-                pFG1->field_6_flags.Clear(BaseGameObject::eCantKill_Bit11);
-            }
-            else if (pFG1->field_6_flags.Get(BaseGameObject::eDrawable_Bit4))
-            {
-                pFG1->field_6_flags.Set(BaseGameObject::eCantKill_Bit11);
-                pFG1->VRender(ppOtBuffer);
-            }
-        }
-
-        DebugFont_Flush_4DD050();
-        PSX_DrawSync_4F6280(0);
-        pScreenManager_5BB5F4->VRender(ppOtBuffer);
+        Game_RenderAllToOt(ppOtBuffer, true);
+        PS2_PROF_END(GameRender);
         SYS_EventsPump_494580(); // Exit checking?
 
         GetGameAutoPlayer().SyncPoint(SyncPoints::RenderOT);

@@ -11,6 +11,16 @@ void SDLSoundSystem::Init(u32 /*sampleRate*/, s32 /*bitsPerSample*/, s32 /*isSte
 {
     mCreated = false;
 
+#ifdef RELIVE_PS2_HOSTFS
+    // TEMP diagnostic: start without audio when ps2noaudio.txt is present.
+    if (FILE* marker = fopen("ps2noaudio.txt", "r"))
+    {
+        fclose(marker);
+        LOG_INFO("Audio disabled by ps2noaudio.txt");
+        return;
+    }
+#endif
+
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO))
     {
         LOG_ERROR("SDL_Init(SDL_INIT_AUDIO) failed " << SDL_GetError());
@@ -24,7 +34,12 @@ void SDLSoundSystem::Init(u32 /*sampleRate*/, s32 /*bitsPerSample*/, s32 /*isSte
 
     mAudioDeviceSpec.format = SDL_AUDIO_S16;
     mAudioDeviceSpec.channels = 2;
+#ifdef __PS2__
+    // The game's samples are 22 kHz; mixing at 44.1 kHz doubled the EE cost for nothing.
+    mAudioDeviceSpec.freq = 22050;
+#else
     mAudioDeviceSpec.freq = 44100;
+#endif
 
     mAudioStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &mAudioDeviceSpec, SDLSoundSystem::AudioCallBackStatic, this);
     if (!mAudioStream)
@@ -142,6 +157,46 @@ void SDLSoundSystem::AudioCallBack(SDL_AudioStream* stream, s32 additionalAmount
     }
 
     const s32 bufferLenSamples = additionalAmount / sizeof(StereoSample_S16);
+#ifdef __PS2__
+    if (static_cast<s32>(mPs2Out.size()) < bufferLenSamples)
+    {
+        mPs2Out.resize(bufferLenSamples);
+    }
+    #ifdef RELIVE_PS2_HOSTFS
+    // TEMP diagnostic: ps2nomix.txt -> output silence without touching any voice.
+    static const bool sNoMix = []()
+    {
+        FILE* f = fopen("ps2nomix.txt", "r");
+        if (f)
+        {
+            fclose(f);
+        }
+        return f != nullptr;
+    }();
+    if (sNoMix)
+    {
+        memset(mPs2Out.data(), 0, bufferLenSamples * sizeof(StereoSample_S16));
+    }
+    else
+    #endif
+    {
+        RenderAudioPs2(mPs2Out.data(), bufferLenSamples);
+    }
+    SDL_PutAudioStreamData(stream, mPs2Out.data(), bufferLenSamples * sizeof(StereoSample_S16));
+    #if defined(RELIVE_PS2_HOSTFS) || defined(RELIVE_PS2_DISCTRACE)
+    static u32 sBytes = 0;
+    static u32 sCalls = 0;
+    sBytes += static_cast<u32>(additionalAmount);
+    sCalls++;
+    if (sBytes >= static_cast<u32>(mAudioDeviceSpec.freq) * 4u * 5u)
+    {
+        LOG_INFO("Audio: " << sCalls << " callbacks, " << sBytes << " bytes (5 s of sound) at " << SDL_GetTicks() << " ms");
+        sBytes = 0;
+        sCalls = 0;
+    }
+    #endif
+    return;
+#endif
     std::vector<StereoSample_S16> buffer(bufferLenSamples);
 
     if (gLatencyHack)
@@ -165,8 +220,111 @@ void SDLSoundSystem::AudioCallBack(SDL_AudioStream* stream, s32 additionalAmount
     }
 
     SDL_PutAudioStreamData(stream, buffer.data(), additionalAmount);
+
 }
 
+
+#ifdef __PS2__
+void SDLSoundSystem::RenderAudioPs2(StereoSample_S16* pOut, s32 count)
+{
+    std::lock_guard<std::recursive_mutex> listLock(Ps2VoiceListLock());
+    if (static_cast<s32>(mPs2Mix.size()) < count * 2)
+    {
+        mPs2Mix.resize(count * 2);
+    }
+    s32* pMix = mPs2Mix.data();
+    memset(pMix, 0, count * 2 * sizeof(s32));
+
+    // Same overall gain as the PC mixer: sample * pan/10000 * volume/127 * 0.35, as a Q15 factor.
+    auto gainFor = [](s32 pan, s32 volume) -> s32
+    {
+        return static_cast<s32>((static_cast<s64>(pan) * volume * 11469) / (10000 * 127));
+    };
+
+    for (s32 vi = 0; vi < MAX_VOICE_COUNT; vi++)
+    {
+        SDLSoundBuffer* pVoice = sAE_ActiveVoices[vi];
+        if (!pVoice || !pVoice->mBuffer || pVoice->mBuffer->empty())
+        {
+            continue;
+        }
+
+        // Voices are deleted by the game thread (SDLSoundBuffer::Release), never here.
+        auto& st = pVoice->mState;
+        if (st.eStatus != SDLSoundBufferStatus::Playing || st.iSampleCount == 0)
+        {
+            continue;
+        }
+
+        const s16* pSamples = reinterpret_cast<const s16*>(pVoice->GetBuffer()->data());
+        const u32 frames = static_cast<u32>(st.iSampleCount / st.iChannels);
+        const u32 endPos = frames << 16;
+        u32 pos = static_cast<u32>(st.fPlaybackPosition * 65536.0f);
+        const u32 step = static_cast<u32>(st.fFrequency * 65536.0f);
+
+        s32 leftPan = 10000;
+        s32 rightPan = 10000;
+        if (st.iChannels == 1 && gAudioStereo)
+        {
+            if (st.iPan < 0)
+            {
+                rightPan = 10000 - abs(st.iPan);
+            }
+            else if (st.iPan > 0)
+            {
+                leftPan = 10000 - abs(st.iPan);
+            }
+        }
+        s32 gainL = gainFor(leftPan, st.iVolume);
+        s32 gainR = gainFor(rightPan, st.iVolume);
+
+        for (s32 i = 0; i < count; i++)
+        {
+            if (st.iVolume != st.iVolumeTarget)
+            {
+                st.iVolume += st.iVolume < st.iVolumeTarget ? 1 : -1;
+                gainL = gainFor(leftPan, st.iVolume);
+                gainR = gainFor(rightPan, st.iVolume);
+            }
+
+            const u32 frame = pos >> 16;
+            s32 l;
+            s32 r;
+            if (st.iChannels == 2)
+            {
+                l = pSamples[frame * 2];
+                r = pSamples[frame * 2 + 1];
+            }
+            else
+            {
+                l = r = pSamples[frame];
+            }
+            pMix[i * 2] += (l * gainL) >> 15;
+            pMix[i * 2 + 1] += (r * gainR) >> 15;
+
+            pos += step;
+            if (pos >= endPos)
+            {
+                pos = 0;
+                if (!st.bLoop)
+                {
+                    st.eStatus = SDLSoundBufferStatus::Stopped;
+                    break;
+                }
+            }
+        }
+        st.fPlaybackPosition = static_cast<f32>(pos) / 65536.0f;
+    }
+
+    for (s32 i = 0; i < count; i++)
+    {
+        const s32 l = pMix[i * 2];
+        const s32 r = pMix[i * 2 + 1];
+        pOut[i].left = static_cast<s16>(l > 32767 ? 32767 : (l < -32768 ? -32768 : l));
+        pOut[i].right = static_cast<s16>(r > 32767 ? 32767 : (r < -32768 ? -32768 : r));
+    }
+}
+#endif
 
 void SDLSoundSystem::RenderAudioThread()
 {

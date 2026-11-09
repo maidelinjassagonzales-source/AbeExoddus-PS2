@@ -44,6 +44,9 @@ public:
     virtual void BltBackBuffer(const SDL_Rect* pCopyRect, const SDL_Rect* pDst) = 0;
     virtual void OutputSize(s32* w, s32* h) = 0;
     virtual bool UpdateBackBuffer(const void* pPixels, s32 pitch) = 0;
+    // Optional hint: only this part of the next UpdateBackBuffer() source is shown (nullptr = all).
+    virtual void SetUploadRect(const SDL_Rect* /*pRect*/)
+    { }
     virtual void CreateBackBuffer(bool filter, s32 format, s32 w, s32 h) = 0;
 
     virtual void SetTPage(s16 tPage) = 0;

@@ -11,6 +11,9 @@
 #include "Sys.hpp"
 #include "Sound/Sound.hpp"
 #include "Masher.hpp"
+#include "Ps2Profiler.hpp"
+#include "Ps2CreditsIntro.hpp"
+#include "Ps2Trace.hpp"
 #include "DDraw.hpp"
 #include "VGA.hpp"
 #include "GameAutoPlayer.hpp"
@@ -317,12 +320,45 @@ static void Render_DDV_Frame(Bitmap& tmpBmp)
     }
 }
 
+#ifdef RELIVE_PS2_HOSTFS
+s32 gPs2MovieTestMaxFrames = 0;
+#endif
+
 EXPORT s8 CC DDV_Play_Impl_4932E0(const char_type* pMovieName)
 {
     if (!*pMovieName)
     {
         return 1;
     }
+
+#ifdef __PS2__
+    // PS2 port: the port credits play once, right before the Oddworld Inhabitants logo.
+    static bool sCreditsShown = false;
+    if (!sCreditsShown && SDL_strcasecmp(pMovieName, "LOGO.STR") == 0)
+    {
+        sCreditsShown = true;
+        Ps2_PlayCreditsIntro();
+    }
+    PS2_TRACE(pMovieName);
+#endif
+
+#ifdef RELIVE_PS2_HOSTFS
+    // Test builds: ps2skipfmv.txt in the game folder skips every movie, to reach gameplay quickly.
+    static const bool sSkipMovies = []()
+    {
+        FILE* f = fopen("ps2skipfmv.txt", "r");
+        if (f)
+        {
+            fclose(f);
+        }
+        return f != nullptr;
+    }();
+    if (sSkipMovies)
+    {
+        LOG_INFO("DDV " << pMovieName << " skipped (ps2skipfmv.txt)");
+        return 1;
+    }
+#endif
 
     pMasherInstance_5CA1EC = Open_DDV(pMovieName);
     if (!pMasherInstance_5CA1EC)
@@ -335,6 +371,7 @@ EXPORT s8 CC DDV_Play_Impl_4932E0(const char_type* pMovieName)
         SYS_EventsPump_494580();
     }
 
+    LOG_INFO("DDV " << pMovieName << ": " << pMasher_video_header_5CA204->field_4_width << "x" << pMasher_video_header_5CA204->field_8_height << " @ " << pMasher_header_5CA1E4->field_8_frame_rate << " fps, " << pMasher_header_5CA1E4->field_C_number_of_frames << " frames");
     bHasAudio_5CA234 = ((u32) pMasher_header_5CA1E4->field_4_contains >> 1) & 1;
     fmv_single_audio_frame_size_in_samples_5CA240 = pMasher_audio_header_5CA1E0->field_C_single_audio_frame_size;
     const auto fmv_sound_entry_size = fmv_single_audio_frame_size_in_samples_5CA240 * (pMasher_audio_header_5CA1E0->field_10_num_frames_interleave + 6);
@@ -379,9 +416,12 @@ EXPORT s8 CC DDV_Play_Impl_4932E0(const char_type* pMovieName)
             // Lock the back buffer
 #if USE_SDL3
             // Decode the video frame to the bitmap pixel buffer
-            SDL_LockSurface(tmpBmp.field_0_pSurface);
-            Masher_DecodeVideoFrame_4EAC40(pMasherInstance_5CA1EC, tmpBmp.field_0_pSurface->pixels);
-            SDL_UnlockSurface(tmpBmp.field_0_pSurface);
+            {
+                PS2_PROF_SCOPE(DdvDecode);
+                SDL_LockSurface(tmpBmp.field_0_pSurface);
+                Masher_DecodeVideoFrame_4EAC40(pMasherInstance_5CA1EC, tmpBmp.field_0_pSurface->pixels);
+                SDL_UnlockSurface(tmpBmp.field_0_pSurface);
+            }
 #else
             DDSURFACEDESC surfaceDesc = {};
             surfaceDesc.dwSize = sizeof(DDSURFACEDESC);
@@ -474,7 +514,11 @@ EXPORT s8 CC DDV_Play_Impl_4932E0(const char_type* pMovieName)
             DD_Flip_4F15D0();
 #endif
 
-            const s32 bMoreFrames = Masher_ReadNextFrame_4EAC20(pMasherInstance_5CA1EC); // read audio and video frame
+            s32 bMoreFrames = 0;
+            {
+                PS2_PROF_SCOPE(DdvRead);
+                bMoreFrames = Masher_ReadNextFrame_4EAC20(pMasherInstance_5CA1EC);
+            } // read audio and video frame
             if (bNoAudioOrAudioError_5CA1F4)
             {
                 while ((s32)(SYS_GetTicks() - movieStartTimeStamp_5CA244) <= (1000 * fmv_num_read_frames_5CA23C / pMasher_header_5CA1E4->field_8_frame_rate))
@@ -537,6 +581,15 @@ EXPORT s8 CC DDV_Play_Impl_4932E0(const char_type* pMovieName)
 
             SYS_EventsPump_494580();
             PSX_VSync_4F6170(0);
+
+#ifdef RELIVE_PS2_HOSTFS
+            // Movie test mode: stop each movie after a few seconds.
+            extern s32 gPs2MovieTestMaxFrames;
+            if (gPs2MovieTestMaxFrames > 0 && static_cast<s32>(fmv_num_read_frames_5CA23C) >= gPs2MovieTestMaxFrames)
+            {
+                bMoreFrames = 0;
+            }
+#endif
 
             if (!bMoreFrames)
             {
@@ -769,3 +822,37 @@ bool AreMovieSkippingInputsHeld()
         return Input_IsVKPressed_4EDD40(VK_ESCAPE) || Input_IsVKPressed_4EDD40(VK_RETURN);
     }
 }
+
+#ifdef RELIVE_PS2_HOSTFS
+// Test builds: ps2fmvtest.txt lists movie names (one per line, NAME.STR). Each one is opened and
+// played for ~2 s with sound, and the result is logged, to check every movie of the game decodes.
+void Ps2_TestAllMovies()
+{
+    FILE* f = fopen("ps2fmvtest.txt", "r");
+    if (!f)
+    {
+        return;
+    }
+    gPs2MovieTestMaxFrames = 30;
+    s32 ok = 0;
+    s32 failed = 0;
+    char_type line[64] = {};
+    while (fgets(line, sizeof(line), f))
+    {
+        char_type name[64] = {};
+        if (sscanf(line, "%63s", name) != 1)
+        {
+            continue;
+        }
+        const u64 start = SDL_GetTicks();
+        const s8 played = DDV_Play_Impl_4932E0(name);
+        const s32 frames = static_cast<s32>(fmv_num_read_frames_5CA23C);
+        const bool good = played && frames > 0;
+        good ? ok++ : failed++;
+        LOG_INFO("FMV test: " << name << (good ? " OK" : " FAILED") << " frames " << frames << " in " << (SDL_GetTicks() - start) << " ms");
+    }
+    fclose(f);
+    gPs2MovieTestMaxFrames = 0;
+    LOG_INFO("FMV test: finished, " << ok << " ok, " << failed << " failed");
+}
+#endif

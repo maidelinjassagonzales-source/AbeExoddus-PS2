@@ -188,7 +188,7 @@ void AudioDecompressor::decode_16bit_audio_frame(u16* outPtr, s32 numSamplesPerF
 u16* AudioDecompressor::SetupAudioDecodePtrs(u16* rawFrameBuffer)
 {
     mAudioFrameDataPtr = rawFrameBuffer;
-    mWorkBits = *reinterpret_cast<u32*>(mAudioFrameDataPtr);
+    memcpy(&mWorkBits, mAudioFrameDataPtr, sizeof(mWorkBits)); // the audio block is not 4-byte aligned
     mAudioFrameDataPtr = mAudioFrameDataPtr + 2;
     mUsedBits = 32;
     return mAudioFrameDataPtr;
@@ -852,7 +852,9 @@ s32 Masher::Init_4E6770(const char_type* movieFileName)
     }
 
     // Align the size
-    field_84_max_frame_size = RoundUpPowerOf2(field_84_max_frame_size, 2);
+    // 16 (was 2): the double-buffered frames start at this offset and are read with 32-bit loads,
+    // which must be aligned on the PS2 (address error on a real console).
+    field_84_max_frame_size = RoundUpPowerOf2(field_84_max_frame_size, 16);
     field_80_raw_frame_data = static_cast<s32*>(malloc(2 * field_84_max_frame_size));
     if (!field_80_raw_frame_data)
     {
@@ -958,7 +960,8 @@ s32 Masher::ReadNextFrame_4E6B30()
         field_40_video_frame_to_decode = reinterpret_cast<void*>(&pFrameData[frameOffset + sizeof(u32)]);
 
         // Skip video data + video data len to get start of sound data
-        u32 videoDataSize = *reinterpret_cast<u32*>(&pFrameData[frameOffset]);
+        u32 videoDataSize = 0;
+        memcpy(&videoDataSize, &pFrameData[frameOffset], sizeof(videoDataSize)); // may be misaligned
         field_48_sound_frame_to_decode = reinterpret_cast<s32*>(&pFrameData[frameOffset + sizeof(u32) + videoDataSize]);
     }
     return ++field_68_frame_number < field_4_ddv_header.field_C_number_of_frames + 2;

@@ -1,0 +1,17 @@
+﻿# Entrada automÃ¡tica para pruebas en PCSX2 (solo builds RELIVE_PS2_HOSTFS)
+# <update de inicio> <duraciÃ³n en updates> <botones separados por +>
+# Botones: up down left right run action sneak throw hop fart chant pause confirm back hello follow wait
+# Prefijo "p2:" = segundo mando (jugador 2 del cooperativo), p.ej. "500 4 p2:pause"
+#
+# MenÃº principal (aparece hacia el update 300): "Comenzar" ya estÃ¡ seleccionado
+330 4 confirm
+# "Â¿Leer la historia?" (cam 12): derecha hasta "Â¡Que comience el juego!" y confirmar
+400 3 right
+430 4 confirm
+# Ya en las Minas: el jugador 2 se une con START (ps2warp.txt lleva luego a los dos junto a un slig)
+900 4 p2:pause
+# El jugador 2 canta para poseer al slig
+545 150 p2:chant
+# Con el slig poseÃ­do: caminar y hablar
+720 40 p2:right
+780 4 p2:hello

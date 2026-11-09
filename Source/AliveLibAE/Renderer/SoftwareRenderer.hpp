@@ -13,6 +13,7 @@ public:
     void BltBackBuffer(const SDL_Rect* pCopyRect, const SDL_Rect* pDst) override;
     void OutputSize(s32* w, s32* h) override;
     bool UpdateBackBuffer(const void* pPixels, s32 pitch) override;
+    void SetUploadRect(const SDL_Rect* pRect) override;
     void CreateBackBuffer(bool filter, s32 format, s32 w, s32 h) override;
     void PalFree(const PalRecord& record) override;
     bool PalAlloc(PalRecord& record) override;
@@ -44,6 +45,12 @@ private:
 
     s32 mLastH = 0;
     s32 mLastW = 0;
+
+    s32 mFormat = 0;
+    bool mConvert565To1555 = false;
+    bool mHasUploadRect = false;
+    SDL_Rect mUploadRect = {}; // PS2: the GS renderer only takes ABGR1555/ABGR8888 textures
+    u32 mFrameCount = 0;
 
     s32 mFrame_xOff = 0;
     s32 mFrame_yOff = 0;

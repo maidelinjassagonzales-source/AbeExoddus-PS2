@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Ps2Coop.hpp"
 #include "BaseAnimatedWithPhysicsGameObject.hpp"
 #include "Function.hpp"
 #include "Map.hpp"
@@ -133,6 +134,7 @@ void BaseAnimatedWithPhysicsGameObject::Render_424B90(PrimHeader** ppOt)
                     &b);
             }
 
+            Ps2Coop_TintPlayer2(this, &r, &g, &b);
             field_20_animation.field_8_r = static_cast<u8>(r);
             field_20_animation.field_9_g = static_cast<u8>(g);
             field_20_animation.field_A_b = static_cast<u8>(b);

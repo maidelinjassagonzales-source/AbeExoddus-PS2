@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Ps2Coop.hpp"
 #include "DDCheat.hpp"
 #include "stdlib.hpp"
 #include "Function.hpp"
@@ -282,7 +283,8 @@ void DDCheat::Update_415780()
 
     auto activePadPressed = sInputObject_5BD4E0.field_0_pads[sCurrentControllerIndex_5C1BBE].field_C_held;
 
-    if (sCommandLine_DDCheatEnabled_5CA4B5)
+    // The debug menu is driven by the other pad; in PS2 co-op that pad belongs to player 2.
+    if (sCommandLine_DDCheatEnabled_5CA4B5 && !Ps2Coop_IsActive())
     {
         if (field_3C_flags.Get(DDCheat::Flags_3C::eOnTeleport_Bit3))
         {

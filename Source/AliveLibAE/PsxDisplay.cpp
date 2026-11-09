@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Ps2Profiler.hpp"
 #include "PsxDisplay.hpp"
 #include "Function.hpp"
 #include "ScreenManager.hpp"
@@ -269,6 +270,31 @@ void PsxDisplay::PutCurrentDispEnv_41DFA0()
 ALIVE_VAR(1, 0x5CA4D1, bool, sCommandLine_NoFrameSkip_5CA4D1, false);
 ALIVE_VAR(1, 0x55EF8C, s32, sbDisplayRenderFrame_55EF8C, 1);
 
+#ifdef __PS2__
+s32 PSX_VSync_LastMillisecond(); // Psx.cpp
+
+void PsxDisplay::PS2_Render_OT_Intermediate()
+{
+    PSX_PutDrawEnv_4F5980(&field_10_drawEnv[0].field_0_draw_env);
+    {
+        PS2_PROF_SCOPE(DrawOT);
+        PSX_DrawOTag_4F6540(field_10_drawEnv[0].field_70_ot_buffer);
+        PSX_DrawSync_4F6280(0);
+    }
+    {
+        // Show it half a step (one 60 Hz field) after the previous real frame. Not PSX_VSync(): that
+        // paces the 30 fps game step and must keep running once per step.
+        PS2_PROF_SCOPE(VSyncWait);
+        while (SYS_GetTicks() - PSX_VSync_LastMillisecond() < 1000 / 60)
+        {
+            SDL_Delay(1);
+        }
+    }
+    PSX_PutDispEnv_4F58E0(&field_10_drawEnv[0].field_5C_disp_env);
+    PSX_ClearOTag_4F6290(field_10_drawEnv[0].field_70_ot_buffer, field_A_buffer_size);
+}
+#endif
+
 void PsxDisplay::PSX_Display_Render_OT_41DDF0()
 {
 #if DEVELOPER_MODE
@@ -289,6 +315,7 @@ void PsxDisplay::PSX_Display_Render_OT_41DDF0()
         {
             if (sbDisplayRenderFrame_55EF8C)
             {
+                PS2_PROF_SCOPE(DrawOT);
                 PSX_DrawOTag_4F6540(field_10_drawEnv[0].field_70_ot_buffer);
                 PSX_DrawSync_4F6280(0);
             }
@@ -297,7 +324,10 @@ void PsxDisplay::PSX_Display_Render_OT_41DDF0()
                 pScreenManager_5BB5F4->sub_40EE10();
                 turn_off_rendering_BD0F20 = 1;
             }
-            PSX_VSync_4F6170(2);
+            {
+                PS2_PROF_SCOPE(VSyncWait);
+                PSX_VSync_4F6170(2);
+            }
         }
         PSX_PutDispEnv_4F58E0(&field_10_drawEnv[0].field_5C_disp_env);
         PSX_ClearOTag_4F6290(field_10_drawEnv[0].field_70_ot_buffer, field_A_buffer_size);

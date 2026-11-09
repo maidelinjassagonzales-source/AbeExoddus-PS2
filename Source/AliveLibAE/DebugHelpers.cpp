@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include <sys/stat.h>
 #include "DebugHelpers.hpp"
 #include "stdlib.hpp"
 #include <iomanip>
@@ -2149,7 +2150,16 @@ void DebugHelpers_Init()
 
 [[nodiscard]] std::string FS::GetPrefPath()
 {
-#if MOBILE
+#if defined(__PS2__) && !defined(RELIVE_PS2_HOSTFS)
+    // Real PS2: the game runs from a disc image (or USB); saves and settings go to the memory card.
+    static bool sMade = false;
+    if (!sMade)
+    {
+        sMade = true;
+        mkdir("mc0:/EXODDUS", 0777);
+    }
+    return "mc0:/EXODDUS/";
+#elif MOBILE
     s8* prefPath = SDL_GetPrefPath("Oddworld", "Abes Exoddus");
     std::string str = std::string(prefPath);
     SDL_free(prefPath);

@@ -71,6 +71,13 @@ inline void Install_Crash_Handler()
     ::SetUnhandledExceptionFilter(crash_handler);
 }
 
+#elif defined(__PS2__)
+
+// PS2: no backtrace support, crashes are handled by the EE exception handler.
+inline void Install_Crash_Handler()
+{
+}
+
 #else // Assume Linux/mac
 
     #include <stdio.h>

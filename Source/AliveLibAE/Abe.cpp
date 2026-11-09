@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Ps2Coop.hpp"
 #include "Abe.hpp"
 #include "Function.hpp"
 #include "Map.hpp"
@@ -954,7 +955,11 @@ void Abe::dtor_44B380()
 
     field_164_wheel_id = -1;
 
-    sActiveHero_5C1B68 = spAbe_554D5C;
+    // PS2 co-op: player 2 going away must not clear player 1's hero slot.
+    if (!Ps2Coop_OnAbeDestroyed(this))
+    {
+        sActiveHero_5C1B68 = spAbe_554D5C;
+    }
 
     dtor_4080B0();
 }
@@ -2177,6 +2182,23 @@ s32 Abe::vGetSaveState_457110(u8* pSaveBuffer)
 
 s16 Abe::vTakeDamage_44BB50(BaseGameObject* pFrom)
 {
+#ifdef RELIVE_PS2_HOSTFS
+    LOG_INFO("Damage to " << (Ps2Coop_IsPlayer2(this) ? "player 2" : "player 1") << " from type " << static_cast<s32>(pFrom ? pFrom->Type() : AETypes::eNone_0) << " health " << FP_GetDouble(field_10C_health));
+    // Test-only: ps2godmode.txt keeps player 1 alive so co-op features can be exercised anywhere.
+    static const bool sGodMode = []()
+    {
+        FILE* f = fopen("ps2godmode.txt", "r");
+        if (f)
+        {
+            fclose(f);
+        }
+        return f != nullptr;
+    }();
+    if (sGodMode && !Ps2Coop_IsPlayer2(this))
+    {
+        return 0;
+    }
+#endif
     // Stop chant sound music.
     SND_SEQ_Stop_4CAE60(SeqId::MudokonChant1_10);
 
@@ -2692,6 +2714,26 @@ BaseAliveGameObject* Abe::FindObjectToPossess_44B7B0()
 
     s16 maxDistance = 32767;
     FP lastScale = {};
+#ifdef RELIVE_PS2_HOSTFS
+    static u32 sLastLog = 0;
+    const bool logCandidates = sGnFrame_5C1B84 - sLastLog >= 30;
+    if (logCandidates)
+    {
+        sLastLog = sGnFrame_5C1B84;
+        for (s32 i = 0; i < gBaseAliveGameObjects_5C1B7C->Size(); i++)
+        {
+            BaseAliveGameObject* pObj = gBaseAliveGameObjects_5C1B7C->ItemAt(i);
+            if (!pObj)
+            {
+                break;
+            }
+            LOG_INFO("Possess scan by " << (Ps2Coop_IsPlayer2(this) ? "P2" : "P1") << ": type " << static_cast<s32>(pObj->Type())
+                     << " can " << (pObj->field_114_flags.Get(Flags_114::e114_Bit3_Can_Be_Possessed) ? 1 : 0)
+                     << " cam " << static_cast<s32>(pObj->Is_In_Current_Camera_424A70()) << " hp " << FP_GetDouble(pObj->field_10C_health)
+                     << " pos " << FP_GetExponent(pObj->field_B8_xpos) << "," << FP_GetExponent(pObj->field_BC_ypos));
+        }
+    }
+#endif
     for (s32 i = 0; i < gBaseAliveGameObjects_5C1B7C->Size(); i++)
     {
         BaseAliveGameObject* pObj = gBaseAliveGameObjects_5C1B7C->ItemAt(i);
@@ -5856,6 +5898,11 @@ void Abe::Motion_57_Dead_4589A0()
             return;
 
         case 5:
+            // PS2 co-op: player 2 respawns next to player 1 instead of resetting the level.
+            if (Ps2Coop_OnAbeDeathReset(this))
+            {
+                return;
+            }
             Event_Broadcast_422BC0(kEventDeathReset, this);
             if (static_cast<s32>(sGnFrame_5C1B84) <= field_128.field_0_abe_timer)
             {
@@ -7626,6 +7673,12 @@ void Abe::Motion_112_Chant_45B1C0()
             {
                 New_RandomizedChant_Particle_45BC70(this);
             }
+#ifdef RELIVE_PS2_HOSTFS
+            if (!(sGnFrame_5C1B84 % 15))
+            {
+                LOG_INFO("Chant " << (Ps2Coop_IsPlayer2(this) ? "P2" : "P1") << ": frame " << sGnFrame_5C1B84 << " timer " << field_124_timer << " target " << (pObj ? static_cast<s32>(pObj->Type()) : -1) << " whirl " << (pOrbWhirlWind ? 1 : 0));
+            }
+#endif
 
             if (static_cast<s32>(sGnFrame_5C1B84) >= field_124_timer - 70)
             {

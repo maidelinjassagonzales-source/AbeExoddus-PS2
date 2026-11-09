@@ -1,5 +1,6 @@
 #include "stdafx_common.h"
 #include "Sys_common.hpp"
+#include "Ps2Trace.hpp"
 
 #if USE_SDL3
     #include <SDL3/SDL.h>
@@ -127,7 +128,29 @@ void Sys_Main_Common()
 #if USE_SDL3
     PrintSDLVersions(); // Ok to call before init
 
+#ifdef __PS2__
+    // PS2: bring subsystems up one by one so a stuck IOP driver shows up in the log.
+    const struct { u32 flag; const char_type* name; } kSubsystems[] = {
+        {SDL_INIT_EVENTS, "events"},
+        {SDL_INIT_VIDEO, "video"},
+        {SDL_INIT_JOYSTICK, "joystick"},
+        {SDL_INIT_GAMEPAD, "gamepad"},
+        {SDL_INIT_HAPTIC, "haptic"},
+    };
+    for (const auto& sub : kSubsystems)
+    {
+        LOG_INFO("SDL init " << sub.name << "...");
+        if (!SDL_InitSubSystem(sub.flag))
+        {
+            LOG_ERROR("SDL init " << sub.name << " failed: " << SDL_GetError());
+            PS2_TRACE(sub.name, 0xDEADu);
+        }
+    }
+    LOG_INFO("SDL init done");
+    if (false)
+#else
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_HAPTIC | SDL_INIT_JOYSTICK | SDL_INIT_GAMEPAD))
+#endif
     {
         LOG_ERROR(SDL_GetError());
         ALIVE_FATAL(SDL_GetError());

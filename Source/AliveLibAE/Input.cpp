@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "Input.hpp"
+#include "Ps2Trace.hpp"
 #include "logger.hpp"
 #include "Function.hpp"
 #include "Game.hpp"
@@ -1245,6 +1246,70 @@ ALIVE_VAR(1, 0x5c9f74, u32, sPrevious_down_keyboard_keys_5C9F74, 0);
 ALIVE_VAR(1, 0x5c9f78, u32, dword_5C9F78, 0);
 ALIVE_VAR(1, 0x5c9794, s32, sKeyboardBindings_5C9794, 0);
 
+#ifdef __PS2__
+EXPORT s32 Input_Convert_KeyboardGamePadInput_To_Internal_Format_492150();
+
+// Second controller for the PS2 co-op mode. The engine only knows one physical pad, so this runs
+// the same conversion (bindings, auto-run, chant combos, rumble) with the second gamepad swapped
+// in and with its own copy of the conversion's per-pad state.
+u32 Input_ReadSecondPadPs2()
+{
+    static SDL_Gamepad* sSecondPad = nullptr;
+    static u32 sPrevKeys = 0;
+    static u32 sAutoRunState = 0;
+    static u32 sRetryCountdown = 0;
+
+    if (!sSecondPad)
+    {
+        if (sRetryCountdown > 0)
+        {
+            sRetryCountdown--;
+            return 0;
+        }
+        sRetryCountdown = 60; // look for a newly plugged pad about once a second
+        s32 count = 0;
+        SDL_JoystickID* pIds = SDL_GetGamepads(&count);
+        const SDL_JoystickID firstId = pSDLController ? SDL_GetGamepadID(pSDLController) : 0;
+        for (s32 i = 0; pIds && i < count && !sSecondPad; i++)
+        {
+            if (pIds[i] != firstId)
+            {
+                sSecondPad = SDL_OpenGamepad(pIds[i]);
+                if (sSecondPad)
+                {
+                    LOG_INFO("Co-op: second pad is " << SDL_GetGamepadName(sSecondPad));
+                }
+            }
+        }
+        SDL_free(pIds);
+        if (!sSecondPad)
+        {
+            return 0;
+        }
+    }
+
+    SDL_Gamepad* const pFirst = pSDLController;
+    const u32 prevKeys = sPrevious_down_keyboard_keys_5C9F74;
+    const u32 autoRun = dword_5C9F78;
+    const s32 converted = sKeyboardBindings_5C9794;
+
+    pSDLController = sSecondPad;
+    sPrevious_down_keyboard_keys_5C9F74 = sPrevKeys;
+    dword_5C9F78 = sAutoRunState;
+
+    const u32 result = static_cast<u32>(Input_Convert_KeyboardGamePadInput_To_Internal_Format_492150());
+
+    sPrevKeys = sPrevious_down_keyboard_keys_5C9F74;
+    sAutoRunState = dword_5C9F78;
+
+    pSDLController = pFirst;
+    sPrevious_down_keyboard_keys_5C9F74 = prevKeys;
+    dword_5C9F78 = autoRun;
+    sKeyboardBindings_5C9794 = converted;
+    return result;
+}
+#endif
+
 #if ORIGINAL_PS1_BEHAVIOR // OG Change - chant with any shoulder button combo
 static bool IsChantingAnyShoulderButton(s32 shoulderButtonsPressedCount)
 {
@@ -1594,6 +1659,7 @@ EXPORT void Input_InitJoyStick_460080()
     SDL_JoystickID* joysticks = SDL_GetJoysticks(&joystickCount);
 
     LOG_INFO("SDL_NumJoysticks: " << joystickCount);
+    PS2_TRACE("joysticks", static_cast<u32>(joystickCount), joystickCount > 0 ? (SDL_IsGamepad(joysticks[0]) ? 1u : 0u) : 0u);
     for (s32 i = 0; i < joystickCount; i++)
     {
         SDL_JoystickID id = joysticks[i];
@@ -1624,6 +1690,14 @@ EXPORT void Input_InitJoyStick_460080()
     }
 
     SDL_free(joysticks);
+    #if defined(__PS2__) && !defined(RELIVE_PS2_HOSTFS)
+    // Real console: without a pad the game cannot be played, so say so instead of looking frozen.
+    if (!sJoystickAvailable_5C2EF4)
+    {
+        extern void Ps2ShowFatalScreen(const char_type* title); // relive/Exe.cpp
+        Ps2ShowFatalScreen("SIN MANDO: el driver del mando no se ha cargado");
+    }
+    #endif
 
 #elif _WIN32
     const u32 count = joyGetNumDevs();
@@ -1889,7 +1963,13 @@ void Input_Reset_492660()
 
 EXPORT u32 Input_IsChanting_45F260()
 {
+#ifdef __PS2__
+    // Co-op: read the pad of whoever is being updated (pad 2 for player 2 and what they possess).
+    // The original always read pad 1, so player 2 could never chant or possess.
+    return (sInputObject_5BD4E0.field_0_pads[sCurrentControllerIndex_5C1BBE].field_0_pressed & InputCommands::Enum::eChant) == InputCommands::Enum::eChant;
+#else
     return (sInputObject_5BD4E0.field_0_pads[0].field_0_pressed & InputCommands::Enum::eChant) == InputCommands::Enum::eChant;
+#endif
 }
 
 // Zeros the input key state array.
@@ -1974,6 +2054,105 @@ void InputObject::SetDemoResource_45F1E0(u32** pDemoRes)
     field_40_command_duration = 0;
 }
 
+#ifdef RELIVE_PS2_HOSTFS
+#include "Map.hpp"
+#include "Abe.hpp"
+#include "Game.hpp"
+
+// Test builds: scripted input from ps2input.txt in the game folder, so runs in PCSX2 can get past
+// menus without a person at the pad. Each line: <start update> <duration> <command[+command...]>
+// e.g. "1900 4 confirm" or "2400 60 right+run". Lines starting with # are ignored.
+// A command starting with "p2:" goes to the second pad, e.g. "3000 4 p2:pause".
+namespace {
+struct ScriptedPress final
+{
+    u32 mStart;
+    u32 mEnd;
+    u32 mButtons;
+    u32 mPad;
+};
+
+static u32 ParseScriptCommands(char_type* pText)
+{
+    static const struct
+    {
+        const char_type* mName;
+        u32 mBits;
+    } kNames[] = {
+        {"up", InputCommands::eUp}, {"down", InputCommands::eDown}, {"left", InputCommands::eLeft}, {"right", InputCommands::eRight},
+        {"run", InputCommands::eRun}, {"action", InputCommands::eDoAction}, {"sneak", InputCommands::eSneak},
+        {"throw", InputCommands::eThrowItem}, {"hop", InputCommands::eHop}, {"fart", InputCommands::eFartOrRoll},
+        {"chant", InputCommands::eChant}, {"pause", InputCommands::ePause}, {"confirm", InputCommands::eUnPause_OrConfirm},
+        {"back", InputCommands::eBack}, {"hello", InputCommands::eGameSpeak1}, {"follow", InputCommands::eGameSpeak2},
+        {"wait", InputCommands::eGameSpeak3},
+    };
+
+    u32 bits = 0;
+    for (char_type* pTok = strtok(pText, "+"); pTok; pTok = strtok(nullptr, "+"))
+    {
+        for (const auto& name : kNames)
+        {
+            if (strcmp(pTok, name.mName) == 0)
+            {
+                bits |= name.mBits;
+            }
+        }
+    }
+    return bits;
+}
+
+static u32 ScriptedInput(u32 pad)
+{
+    static std::vector<ScriptedPress> sPresses;
+    static bool sLoaded = false;
+    static u32 sUpdate = 0;
+
+    if (!sLoaded)
+    {
+        sLoaded = true;
+        if (FILE* f = fopen("ps2input.txt", "r"))
+        {
+            char_type line[128] = {};
+            while (fgets(line, sizeof(line), f))
+            {
+                u32 start = 0;
+                u32 duration = 0;
+                char_type cmd[96] = {};
+                if (line[0] != '#' && sscanf(line, "%u %u %95s", &start, &duration, cmd) == 3)
+                {
+                    const bool secondPad = strncmp(cmd, "p2:", 3) == 0;
+                    sPresses.push_back({start, start + duration, ParseScriptCommands(secondPad ? cmd + 3 : cmd), secondPad ? 1u : 0u});
+                }
+            }
+            fclose(f);
+            LOG_INFO("Scripted input: " << sPresses.size() << " entries from ps2input.txt");
+        }
+    }
+
+    // Pad 0 is read first every update and advances the clock; pad 1 reads the same update.
+    const u32 update = pad == 0 ? sUpdate++ : sUpdate - 1;
+    if (pad == 0 && update % 150 == 0)
+    {
+        LOG_INFO("Update " << update << " level " << static_cast<s32>(gMap_5C3030.field_0_current_level) << " path " << gMap_5C3030.field_2_current_path << " cam " << gMap_5C3030.field_4_current_camera << " camXY " << gMap_5C3030.field_D0_cam_x_idx << "," << gMap_5C3030.field_D2_cam_y_idx
+                 << " hero " << (sActiveHero_5C1B68 && sActiveHero_5C1B68 != spAbe_554D5C ? FP_GetExponent(sActiveHero_5C1B68->field_B8_xpos) : -1) << "," << (sActiveHero_5C1B68 && sActiveHero_5C1B68 != spAbe_554D5C ? FP_GetExponent(sActiveHero_5C1B68->field_BC_ypos) : -1));
+    }
+    u32 buttons = 0;
+    for (const ScriptedPress& press : sPresses)
+    {
+        if (press.mPad == pad && update >= press.mStart && update < press.mEnd)
+        {
+            buttons |= press.mButtons;
+            if (update == press.mStart)
+            {
+                LOG_INFO("Scripted input at update " << update << ": 0x" << std::hex << press.mButtons << std::dec);
+            }
+        }
+    }
+    return buttons;
+}
+} // namespace
+#endif
+
 // BC break of Update_45F040
 void InputObject::Update(BaseGameAutoPlayer& autoPlayer)
 {
@@ -2001,6 +2180,9 @@ void InputObject::Update(BaseGameAutoPlayer& autoPlayer)
 
     field_0_pads[0].field_8_previous = field_0_pads[0].field_0_pressed;
     field_0_pads[0].field_0_pressed = autoPlayer.GetInput(0);
+#ifdef RELIVE_PS2_HOSTFS
+    field_0_pads[0].field_0_pressed |= ScriptedInput(0);
+#endif
 
     if (Is_Demo_Playing_45F220())
     {
@@ -2038,6 +2220,13 @@ void InputObject::Update(BaseGameAutoPlayer& autoPlayer)
 
     field_0_pads[1].field_8_previous = field_0_pads[1].field_0_pressed;
     field_0_pads[1].field_0_pressed = autoPlayer.GetInput(1);
+#ifdef __PS2__
+    // Co-op: the second DualShock drives pad 1 (player 2), with player 1's button layout.
+    field_0_pads[1].field_0_pressed |= Input_ReadSecondPadPs2();
+    #ifdef RELIVE_PS2_HOSTFS
+    field_0_pads[1].field_0_pressed |= ScriptedInput(1);
+    #endif
+#endif
     field_0_pads[1].field_10_released = field_0_pads[1].field_8_previous & ~field_0_pads[1].field_0_pressed;
     field_0_pads[1].field_C_held = field_0_pads[1].field_0_pressed & ~field_0_pads[1].field_8_previous;
     field_0_pads[1].field_4_dir = directionTable_545A4C[field_0_pads[1].field_0_pressed & 0xF];

@@ -144,6 +144,15 @@ SET(AliveLibAESrc
     Particle.cpp
     Movie.hpp
     Movie.cpp
+    Ps2CreditsIntro.cpp
+    Ps2Coop.cpp
+    Ps2Smooth.cpp
+    Ps2Tour.cpp
+    Ps2Tour.hpp
+    Ps2Smooth.hpp
+    Ps2Coop.hpp
+    Ps2CreditsIntro.hpp
+    Ps2CreditsText.hpp
     CameraSwapper.cpp
     CameraSwapper.hpp
     MainMenuTransition.hpp
