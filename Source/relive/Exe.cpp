@@ -53,6 +53,7 @@ extern "C" void reset_IOP(void)
     #include <sio.h>
     #include <stdarg.h>
     #include <kernel.h>
+    #include <osd_config.h>
 
     #include <debug.h>
 
@@ -920,11 +921,39 @@ s32 main(s32 argc, char_type** argv)
         // The BIOS cdrom0: device does not take sub-folders through libc paths; ps2sdk's cdfs: does.
         gPs2DiscDataPrefix = "cdfs:/DATA/";
     }
+    // Multi-language disc: DATA\EN, DATA\ES, DATA\FR, DATA\DE, DATA\IT, each one a full copy of the
+    // game files in that language. The folder follows the console's system language; if the disc
+    // does not carry it, English, then Spanish, then whatever is directly in DATA.
+    const bool fromDisc = argc > 0 && strncmp(argv[0], "cdrom0:", 7) == 0;
+    const char_type* langPrefix[4] = {};
+    if (fromDisc)
+    {
+        static const char_type* const kByLanguage[] = {
+            "cdfs:/DATA/EN/", // LANGUAGE_JAPANESE: no Japanese release on Steam
+            "cdfs:/DATA/EN/", "cdfs:/DATA/FR/", "cdfs:/DATA/ES/", "cdfs:/DATA/DE/", "cdfs:/DATA/IT/"};
+        const s32 lang = configGetLanguage();
+        langPrefix[0] = lang >= 0 && lang < 6 ? kByLanguage[lang] : "cdfs:/DATA/EN/";
+        langPrefix[1] = "cdfs:/DATA/EN/";
+        langPrefix[2] = "cdfs:/DATA/ES/";
+        langPrefix[3] = "cdfs:/DATA/";
+        Ps2Report("[relive-ps2] system language %d -> %s\n", lang, langPrefix[0]);
+    }
     for (s32 i = 0; i < 100; i++)
     {
-        if (FileExists("st.lvl"))
+        extern const char_type* gPs2DiscDataPrefix;
+        bool found = false;
+        for (s32 l = 0; l < 4 && fromDisc && !found; l++)
+        {
+            gPs2DiscDataPrefix = langPrefix[l];
+            found = FileExists("st.lvl");
+        }
+        if (found || (!fromDisc && FileExists("st.lvl")))
         {
             break;
+        }
+        if (fromDisc)
+        {
+            gPs2DiscDataPrefix = "cdfs:/DATA/";
         }
         SDL_Delay(100);
     }

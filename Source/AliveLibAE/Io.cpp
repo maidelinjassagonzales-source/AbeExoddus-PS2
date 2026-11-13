@@ -519,8 +519,186 @@ EXPORT Bool32 CC IO_Seek_Sync_4EAFC0(void* pHandle, u32 offset, u32 origin)
 }
 
 
+#ifdef __PS2__
+// Cinemáticas en PS2: un hilo lee el .DDV por delante, a un anillo en RAM, y el reproductor lee de
+// ahí. Antes cada fotograma se leía del disco en el mismo hilo del juego: cuando el disco (o el
+// USB/HDD de OPL) tardaba, el vídeo se paraba, el audio alcanzaba lo escrito y repetía trozos viejos
+// (se oía cortado y volvía a sonar). Los .DDV se leen siempre en orden, sin saltos.
+#include <kernel.h>
+#include <malloc.h>
+#include <cstring>
+
+namespace {
+constexpr u32 kPs2MovieRing = 1536 * 1024; // varios segundos de vídeo
+constexpr u32 kPs2MovieChunk = 64 * 1024;
+constexpr u32 kPs2MovieStack = 16 * 1024;
+
+struct Ps2MovieStream final
+{
+    IO_FileHandleType file;
+    u8* ring;
+    u32 ringSize;
+    volatile u32 head; // bytes escritos por el hilo
+    volatile u32 tail; // bytes leídos por el reproductor
+    volatile s32 eof;
+    volatile s32 stop;
+    s32 thread;
+    s32 semData;  // hay datos nuevos
+    s32 semSpace; // hay hueco nuevo
+    s32 semDone;  // el hilo ha terminado
+    u8 stack[kPs2MovieStack] __attribute__((aligned(16)));
+};
+
+
+void Ps2MovieReader(void* arg)
+{
+    Ps2MovieStream* s = static_cast<Ps2MovieStream*>(arg);
+    while (!s->stop)
+    {
+        const u32 used = s->head - s->tail;
+        if (s->ringSize - used < kPs2MovieChunk)
+        {
+            WaitSema(s->semSpace); // anillo lleno: espera a que el reproductor consuma
+            continue;
+        }
+        const u32 at = s->head % s->ringSize;
+        const u32 want = kPs2MovieChunk < s->ringSize - at ? kPs2MovieChunk : s->ringSize - at;
+        const size_t got = IO_Read(s->file, s->ring + at, 1u, want);
+        if (got > 0)
+        {
+            s->head += static_cast<u32>(got);
+        }
+        if (got < want)
+        {
+            s->eof = 1;
+            SignalSema(s->semData);
+            break;
+        }
+        SignalSema(s->semData);
+    }
+    SignalSema(s->semDone);
+    ExitThread();
+}
+
+s32 Ps2MakeSema()
+{
+    ee_sema_t sema = {};
+    sema.init_count = 0;
+    sema.max_count = 0x7FFFFFFF;
+    return CreateSema(&sema);
+}
+} // namespace
+
+static void* CC Ps2Movie_Open(const char_type* pFileName)
+{
+    IO_FileHandleType file = IO_Open(pFileName, "rb");
+    if (!file)
+    {
+        return nullptr;
+    }
+    Ps2MovieStream* s = static_cast<Ps2MovieStream*>(memalign(64, sizeof(Ps2MovieStream)));
+    // Si en ese momento no hay 1,5 MB libres (cinemática dentro de un nivel), con menos también sirve.
+    u32 ringSize = kPs2MovieRing;
+    u8* ring = nullptr;
+    while (s && !ring && ringSize >= 256 * 1024)
+    {
+        ring = static_cast<u8*>(memalign(64, ringSize));
+        ringSize = ring ? ringSize : ringSize / 2;
+    }
+    if (!ring)
+    {
+        free(s);
+        IO_Close(file);
+        return nullptr;
+    }
+    s->file = file;
+    s->ring = ring;
+    s->ringSize = ringSize;
+    s->head = s->tail = 0;
+    s->eof = s->stop = 0;
+    s->semData = Ps2MakeSema();
+    s->semSpace = Ps2MakeSema();
+    s->semDone = Ps2MakeSema();
+    ee_thread_t th = {};
+    th.func = reinterpret_cast<void*>(Ps2MovieReader);
+    th.stack = s->stack;
+    th.stack_size = kPs2MovieStack;
+    th.gp_reg = &_gp;
+    th.initial_priority = 32; // por encima del juego (64), por debajo del audio de SDL (16)
+    s->thread = CreateThread(&th);
+    StartThread(s->thread, s);
+    return s;
+}
+
+static void CC Ps2Movie_Close(void* pHandle)
+{
+    Ps2MovieStream* s = static_cast<Ps2MovieStream*>(pHandle);
+    if (!s)
+    {
+        return;
+    }
+    s->stop = 1;
+    SignalSema(s->semSpace);
+    WaitSema(s->semDone);
+    DeleteThread(s->thread);
+    DeleteSema(s->semData);
+    DeleteSema(s->semSpace);
+    DeleteSema(s->semDone);
+    IO_Close(s->file);
+    free(s->ring);
+    free(s);
+}
+
+static Bool32 CC Ps2Movie_Read(void* pHandle, void* pBuffer, u32 readSize)
+{
+    Ps2MovieStream* s = static_cast<Ps2MovieStream*>(pHandle);
+    u8* out = static_cast<u8*>(pBuffer);
+    while (readSize > 0)
+    {
+        const u32 avail = s->head - s->tail;
+        if (avail == 0)
+        {
+            if (s->eof)
+            {
+                return 0;
+            }
+            WaitSema(s->semData); // el disco va por detrás: espera solo lo justo
+            continue;
+        }
+        const u32 at = s->tail % s->ringSize;
+        u32 n = avail < readSize ? avail : readSize;
+        n = n < s->ringSize - at ? n : s->ringSize - at;
+        memcpy(out, s->ring + at, n);
+        s->tail += n;
+        out += n;
+        readSize -= n;
+        SignalSema(s->semSpace);
+    }
+    return 1;
+}
+
+static Bool32 CC Ps2Movie_Wait(void*)
+{
+    return 1;
+}
+
+static Bool32 CC Ps2Movie_Seek(void*, u32, u32)
+{
+    return 0; // los .DDV se leen en orden
+}
+#endif
+
 EXPORT void CC IO_Init_SyncOrASync_4EAC80(s32 bASync)
 {
+#ifdef __PS2__
+    (void) bASync;
+    GetMovieIO().mIO_Open = Ps2Movie_Open;
+    GetMovieIO().mIO_Close = Ps2Movie_Close;
+    GetMovieIO().mIO_Read = Ps2Movie_Read;
+    GetMovieIO().mIO_Wait = Ps2Movie_Wait;
+    GetMovieIO().mIO_Seek = Ps2Movie_Seek;
+    return;
+#endif
 #if _WIN32 && !USE_SDL3_IO
     if (bASync)
     {

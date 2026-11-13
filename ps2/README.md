@@ -8,6 +8,23 @@ descompilación [R.E.L.I.V.E.](https://github.com/AliveTeam/alive_reversing) (Al
 > Este repositorio contiene **solo código**. No incluye ningún archivo del juego.
 > Para jugar necesitas tu propia copia de Abe's Exoddus para PC (por ejemplo, la de Steam).
 
+## Updates
+
+### v1.1 (13-11-2026)
+
+- **Varios idiomas**: el disco puede llevar los datos del juego en inglés, español, francés,
+  alemán e italiano (`DATA/EN`, `DATA/ES`, `DATA/FR`, `DATA/DE`, `DATA/IT`). El juego elige solo el
+  idioma configurado en la consola. Si el disco no lo lleva, usa el inglés, luego el español y, por
+  último, lo que haya directamente en `DATA/`, así que las ISO antiguas siguen funcionando.
+  Los archivos que son iguales en todos los idiomas (músicas, sonidos...) se guardan una sola vez
+  en la ISO.
+- **Cinemáticas sin cortes de audio**: el sonido de los vídeos se entrecortaba y se repetía cuando
+  el disco tardaba en responder. Ahora un hilo aparte va leyendo el vídeo por delante, con un búfer
+  de hasta 1,5 MB, y la reproducción ya no se queda sin datos.
+- **Vibración del mando (DualShock 2)**: los temblores de pantalla del juego (explosiones, bombas,
+  golpes...) ahora hacen vibrar el mando. Antes el driver de mandos de SDL intentaba activar los
+  motores antes de que el mando estuviera listo y desactivaba la vibración para siempre.
+
 ## Novedades de la versión PS2
 
 - **60 FPS**: interpolación de la imagen entre los ticks de lógica del juego.
@@ -39,7 +56,9 @@ y SDL3 compilado para PS2, con los parches de este repositorio aplicados. Todos 
 2. `build-ps2-usb.sh`: compila el ELF para consola real (`RELIVE_PS2_HOSTFS=OFF`).
    `build-ps2.sh` compila la versión de pruebas para PCSX2, que lee los archivos con `host:`.
 3. `make-iso.sh`: genera la ISO `SLUS_999.98` con el ELF y los datos del juego (`*.LVL`, `*.DDV` y
-   `SOUNDS.DAT`) en `DATA/`.
+   `SOUNDS.DAT`) en `DATA/`. Para una ISO con varios idiomas, pon cada versión del juego en una
+   carpeta `EN`, `ES`, `FR`, `DE` o `IT` dentro de `$LANGS` (en Steam: Propiedades → Idioma, y
+   copia los archivos tras cada descarga).
 4. `instalar-en-hdd.ps1`: instala la ISO en el disco duro de la PS2 con hdl_dump.
    `crear-portada-opl.ps1` y `copiar-portada-hdd.sh` generan la portada y la ficha de OPL y las copian.
 
