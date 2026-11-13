@@ -1,0 +1,19 @@
+Oddworld: Abe's Exoddus - PS2 port v1.1 (unofficial, made with AI assistance)
+==========================================================================
+
+This package does NOT contain the game. You need your own copy of Abe's Exoddus on Steam.
+
+1. Install Oddworld: Abe's Exoddus on Steam.
+2. Double-click CrearISO.bat.
+3. SLUS_999.98.ABE_EXODDUS_PS2.iso appears in this folder, in the language your Steam copy uses.
+4. Load it with OPL (HDD, USB or SMB) or in PCSX2.
+
+More languages on one disc: switch the game language in Steam, copy the game folder somewhere,
+and run:  CrearISO.bat -Extra EN=C:\path\english,FR=C:\path\french
+The game picks the PS2 system language (EN, ES, FR, DE, IT).
+
+Español: instala el juego en Steam, haz doble clic en CrearISO.bat y carga la ISO en OPL o PCSX2.
+
+Source code: https://github.com/maidelinjassagonzales-source/AbeExoddus-PS2
+Engine: R.E.L.I.V.E. by the AliveTeam (https://aliveteam.github.io/)
+Not affiliated with Oddworld Inhabitants.

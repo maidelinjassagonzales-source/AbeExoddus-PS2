@@ -3,7 +3,7 @@
 Port no oficial de **Oddworld: Abe's Exoddus** a PlayStation 2, basado en el proyecto de
 descompilación [R.E.L.I.V.E.](https://github.com/AliveTeam/alive_reversing) (AliveTeam).
 
-**Port creado por Aroy24 y William_piraton.**
+**Port creado por Aroy24 y William_piraton**, con ayuda de IA (Claude) para el código.
 
 > Este repositorio contiene **solo código**. No incluye ningún archivo del juego.
 > Para jugar necesitas tu propia copia de Abe's Exoddus para PC (por ejemplo, la de Steam).
@@ -27,6 +27,21 @@ descompilación [R.E.L.I.V.E.](https://github.com/AliveTeam/alive_reversing) (Al
 - **Vibración del mando (DualShock 2)**: los temblores de pantalla del juego (explosiones, bombas,
   golpes...) ahora hacen vibrar el mando. Antes el driver de mandos de SDL intentaba activar los
   motores antes de que el mando estuviera listo y desactivaba la vibración para siempre.
+
+- **ISO en un clic en Windows**: descarga `AbeExoddus-PS2-v1.1.zip` de *Releases*, descomprímelo y
+  haz doble clic en `CrearISO.bat`. Busca tu copia de Steam del juego y genera la ISO en unos
+  segundos, sin instalar nada (solo PowerShell, que ya viene con Windows).
+
+## Cómo jugar (Windows)
+
+1. Ten instalado **Oddworld: Abe's Exoddus** en Steam.
+2. Descarga `AbeExoddus-PS2-v1.1.zip` de la página de *Releases* y descomprímelo.
+3. Doble clic en `CrearISO.bat`. Aparece `SLUS_999.98.ABE_EXODDUS_PS2.iso` en la misma carpeta, con el
+   idioma que tengas puesto en Steam.
+4. Cárgala en OPL (HDD, USB o SMB) o en PCSX2.
+
+Para meter más idiomas, cambia el idioma del juego en Steam, copia los archivos del juego a otra
+carpeta y añádela: `CrearISO.bat -Extra EN=C:\ruta\ingles,FR=C:\ruta\frances`.
 
 ## Novedades de la versión PS2
 
