@@ -17,7 +17,10 @@ descompilación [R.E.L.I.V.E.](https://github.com/AliveTeam/alive_reversing) (Al
   idioma configurado en la consola. Si el disco no lo lleva, usa el inglés, luego el español y, por
   último, lo que haya directamente en `DATA/`, así que las ISO antiguas siguen funcionando.
   Los archivos que son iguales en todos los idiomas (músicas, sonidos...) se guardan una sola vez
-  en la ISO.
+  en la ISO: con los 5 idiomas ocupa 2,75 GB (cabe en un DVD de una capa).
+- **ISO de tamaño DVD arrancable**: en un DVD, la BIOS de la PS2 busca la tabla de rutas del
+  ISO 9660 siempre en el sector 257 (como la deja el generador de discos de Sony) y no encontraba el
+  ejecutable. `make-iso.sh` ahora la coloca ahí.
 - **Cinemáticas sin cortes de audio**: el sonido de los vídeos se entrecortaba y se repetía cuando
   el disco tardaba en responder. Ahora un hilo aparte va leyendo el vídeo por delante, con un búfer
   de hasta 1,5 MB, y la reproducción ya no se queda sin datos.

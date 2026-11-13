@@ -43,10 +43,32 @@ for L in EN ES FR DE IT; do
 done
 [ $langs -gt 0 ] || copy_set "$GAME" "$STAGE/DATA"
 
-# Como un disco de PS2 de verdad: SYSTEM.CNF y el ejecutable al principio, ISO 9660 + UDF (DVD).
-printf '%s 3000
-%s 2000
-' "$STAGE/SYSTEM.CNF" "$STAGE/$ID" > /root/iso_sort.txt
-genisoimage -quiet -iso-level 1 -cache-inodes -udf -sort /root/iso_sort.txt -V ABE_EXODDUS -sysid PLAYSTATION -A PLAYSTATION -o "$ISO" "$STAGE"
+# Como un disco de PS2 de verdad: SYSTEM.CNF y el ejecutable al principio, solo ISO 9660.
+# En un DVD, la BIOS de la PS2 no lee la tabla de rutas donde dice el descriptor del volumen:
+# la busca en el sector 257, donde la pone el CD/DVD Generator de Sony. genisoimage la deja en
+# otro sitio y la BIOS no encontraba el ejecutable ("open fail"). Se reserva ese sector con
+# PAD.BIN (el primer archivo del disco) y luego se copia ahí la tabla y se apunta el descriptor.
+head -c $((300*2048)) /dev/zero > "$STAGE/PAD.BIN"
+printf '%s 4000\n%s 3000\n%s 2000\n' "$STAGE/PAD.BIN" "$STAGE/SYSTEM.CNF" "$STAGE/$ID" > /root/iso_sort.txt
+genisoimage -quiet -iso-level 1 -cache-inodes -sort /root/iso_sort.txt -V ABE_EXODDUS -sysid PLAYSTATION -A PLAYSTATION -o "$ISO" "$STAGE"
+python3 - "$ISO" <<'EOF'
+import struct, sys
+f = open(sys.argv[1], "r+b")
+f.seek(16 * 2048); pvd = bytearray(f.read(2048))
+ptsize, ptl = struct.unpack_from("<I", pvd, 132)[0], struct.unpack_from("<I", pvd, 140)[0]
+root = struct.unpack_from("<I", pvd, 158)[0]
+f.seek(root * 2048); d = f.read(2048); i = 0; pad = None
+while i < len(d) and d[i]:
+    n = d[i + 32]
+    if d[i + 33:i + 33 + n].startswith(b"PAD.BIN"):
+        pad = (struct.unpack_from("<I", d, i + 2)[0], struct.unpack_from("<I", d, i + 10)[0])
+    i += d[i]
+assert pad and ptsize <= 2048 and pad[0] <= 257 and (pad[0] * 2048 + pad[1]) >= 258 * 2048, (pad, ptsize)
+f.seek(ptl * 2048); table = f.read(2048)
+f.seek(257 * 2048); f.write(table)
+struct.pack_into("<I", pvd, 140, 257)
+f.seek(16 * 2048); f.write(pvd)
+print("tabla de rutas: sector %d -> 257 (PAD.BIN en %d)" % (ptl, pad[0]))
+EOF
 rm -rf "$STAGE"
 ls -la "$ISO"
